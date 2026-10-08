@@ -95,7 +95,7 @@ a{color:var(--pri)}
 <div id="upd" data-a="doUpdate">有新版本，點這裡更新 ↻</div>
 <script>
 // ===== 基礎 =====
-const APP_VER = '2026.10.09-6'; // 每次改版都要改，手機才會偵測到新版
+const APP_VER = '2026.10.09-7'; // 每次改版都要改，手機才會偵測到新版
 const $ = s => document.querySelector(s);
 const KEY = 'bk_v1';
 const LN = {co: '公司', me: '個人'};
@@ -598,7 +598,7 @@ async function saveHold(id) {
   if (price !== +o.price) { o.price = price; o.pdate = $('#hPrice').dataset.pdate || ''; if (o.pdate) o.chk = today(); }
   if (!id) S.holds.push(o);
   save(); closeSheet(); render();
-  if (['TW', 'US'].includes(mkt) && navigator.onLine) { toast('抓取股價中…'); const k = await fetchPrices(); render(); toast(k ? '股價已更新' : '已儲存（沒抓到股價，請確認代號或手動填）'); }
+  if (['TW', 'US'].includes(mkt) && navigator.onLine) { toast('抓取股價中…'); const k = await fetchPrices(); render(); toast(k || +o.price > 0 ? `已儲存，價格 ${CUR[o.cur]}${o.price}` : '已儲存（沒抓到股價，請確認代號或手動填）'); }
   else toast('已儲存');
 }
 let TR = null;
@@ -641,6 +641,8 @@ function vSet() {
     h += `<div class="card"><h2>${LN[L]}帳戶</h2>${S.accounts.filter(a => a.ledger === L).map(a => `<div class="row" data-a="accEdit" data-id="${a.id}"><div>${esc(a.name)} <span class="mu">${TYPES[a.type]}${a.hide ? '・已隱藏' : ''}${a.type === 'loan' ? `・月繳 ${money(+a.pay || 0)}・年利率 ${+a.rate || 0}%` : ''}</span></div><span class="mu">編輯 ›</span></div>`).join('')}</div>`;
   }
   h += `<button class="btn sec" data-a="accNew">＋ 新增帳戶／信用卡／貸款</button>`;
+  h += `<div class="card" style="margin-top:16px"><h2>股票／ETF（每一檔股票在這裡新增）</h2>${S.holds.length ? S.holds.map(x => `<div class="row" data-a="holdEdit" data-id="${x.id}"><div>${esc(x.sym)} ${esc(dispName(x))}<div class="mu">${MKT[x.mkt]?.[0].replace('（手動價格）', '') || ''}・${+x.shares || 0} 股</div></div><span class="mu">編輯 ›</span></div>`).join('') : '<span class="mu">還沒有持股。</span>'}</div>
+    <button class="btn sec" data-a="holdNew">＋ 新增股票／ETF</button>`;
   h += `<div class="card" style="margin-top:16px"><h2>定期支出／保險</h2>${S.recs.length ? S.recs.map(r => `<div class="row" data-a="recEdit" data-id="${r.id}"><div>${r.ins ? '<span class="tag ins">保險</span>' : ''}${esc(r.name)} <span class="tag ${r.ledger}">${LN[r.ledger]}</span><div class="mu">${freqLabel(r)}${r.off ? '・已停用' : ''}</div></div><span class="num">${r.cur && r.cur !== 'TWD' ? CUR[r.cur] + r.amt : money(+r.amt)}</span></div>`).join('') : '<span class="mu">還沒有設定。保險、房租、訂閱都可以加在這裡，到期前 7 天會出現在首頁。</span>'}</div>
     <button class="btn sec" data-a="recNew">＋ 新增定期支出／保險</button>`;
   const cs = S.cats.filter(c => c.ledger === setL && c.kind === setK);
@@ -833,6 +835,7 @@ function openAcc(a) {
     <div class="grid2"><div><label class="f">屬於</label><select id="aLed">${['co', 'me'].map(L => `<option value="${L}" ${a.ledger === L ? 'selected' : ''}>${LN[L]}</option>`).join('')}</select></div>
     <div><label class="f">類型</label><select id="aType" ${used ? 'disabled' : ''}>${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${a.type === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div></div>
     <label class="f" id="aOpenL">${openLabel(a.type)}</label><input id="aOpen" inputmode="decimal" value="${+a.open || ''}" placeholder="0">
+    <div id="invF" class="hint" style="display:${a.type === 'invest' ? 'block' : 'none'}">「股票投資」是放股票的帳戶（像證券戶），不是單一檔股票。要加股票請回設定頁，按「＋ 新增股票／ETF」。</div>
     <div id="loanF" style="display:${a.type === 'loan' ? 'block' : 'none'}">
       <div class="grid2"><div><label class="f">年利率 %</label><input id="aRate" inputmode="decimal" value="${+a.rate || ''}" placeholder="例 2.5"></div>
       <div><label class="f">每月還款金額</label><input id="aPay" inputmode="decimal" value="${+a.pay || ''}"></div>
@@ -845,7 +848,7 @@ function openAcc(a) {
     ${!n && !used ? `<button class="btn del" data-a="accDel" data-id="${a.id}">刪除帳戶</button>` : ''}
     ${used ? '<div class="mu" style="margin-top:8px">此帳戶已有交易或持股，無法刪除或改類型；不用了可勾選隱藏。</div>' : ''}`;
   showSheet(h);
-  $('#aType').onchange = e => { $('#loanF').style.display = e.target.value === 'loan' ? 'block' : 'none'; $('#aOpenL').textContent = openLabel(e.target.value); };
+  $('#aType').onchange = e => { $('#invF').style.display = e.target.value === 'invest' ? 'block' : 'none'; $('#loanF').style.display = e.target.value === 'loan' ? 'block' : 'none'; $('#aOpenL').textContent = openLabel(e.target.value); };
 }
 function saveAcc(id) {
   const name = $('#aName').value.trim(); if (!name) return toast('請填名稱');
