@@ -250,7 +250,8 @@ const accBal = (a, m) => isLia(a) ? -(m['A:' + a.id] || 0) : (m['A:' + a.id] || 
 const fxOf = c => !c || c === 'TWD' ? 1 : (S.fx?.[c] || 0);
 const holdVal = h => Math.round((+h.shares || 0) * (+h.price || 0) * fxOf(h.cur));
 const invVal = a => sum(S.holds.filter(h => h.acc === a.id), holdVal);
-const accVal = (a, m) => a.type === 'invest' ? invVal(a) : accBal(a, m);
+// 投資帳戶有持股就用市值；還沒輸入持股時先用投入成本，避免顯示 0
+const accVal = (a, m) => a.type === 'invest' && S.holds.some(h => h.acc === a.id) ? invVal(a) : accBal(a, m);
 // 某帳本的資產負債；公私往來也算進去（個人：公司欠你＝資產；公司：欠老闆＝負債）
 function sheetOf(L, m) {
   const assets = [], debts = [];
@@ -268,6 +269,7 @@ function sheetOf(L, m) {
 }
 // 股價：FinMind 免費 API（台股、美股收盤價），每天每檔抓一次
 async function fetchPrices(force) {
+  if (S.holds.some(h => h.cur !== 'TWD')) await fetchFx(); // 外幣持股需要匯率才算得出台幣市值
   const start = ymd(new Date(Date.now() - 14 * 864e5)); let n = 0;
   for (const h of S.holds) {
     if (!['TW', 'US'].includes(h.mkt) || !h.sym || (!force && h.chk === today())) continue;
@@ -276,6 +278,10 @@ async function fetchPrices(force) {
       const j = await (await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=${ds}&data_id=${encodeURIComponent(h.sym.trim().toUpperCase())}&start_date=${start}`)).json();
       const last = j.data?.[j.data.length - 1], px = last && (last.close ?? last.Close);
       if (px > 0) { h.price = px; h.pdate = last.date; h.chk = today(); n++; }
+      if (!h.name && h.mkt === 'TW') { // 沒填名稱就自動帶入（上市、上櫃、興櫃都查得到）
+        const info = await (await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo&data_id=${encodeURIComponent(h.sym.trim())}`)).json();
+        const it = info.data?.[0]; if (it?.stock_name) { h.name = it.stock_name; if (it.type === 'emerging') h.name += '（興櫃）'; n = n || 1; }
+      }
     } catch {}
   }
   if (n) save();
@@ -382,7 +388,7 @@ function vHome() {
   }).join('')}</div>`;
   const pend = S.txs.filter(isPending).length;
   if (pend) h += `<div class="card warn" data-a="gopend">有 <b>${pend}</b> 筆待分類，點這裡整理 →</div>`;
-  h += netCard(m);
+  h += netCard(m) + homeStocks(m);
   const days = S.lastBackup ? Math.floor((Date.now() - S.lastBackup) / 864e5) : null;
   if (S.txs.length && (days === null || days >= 7)) h += `<div class="card warn" data-a="gobackup">資料只存在這支手機上，${days === null ? '你還沒備份過' : `已 ${days} 天沒備份`}。點這裡匯出備份 →</div>`;
   for (const L of ['co', 'me']) {
@@ -495,6 +501,17 @@ function vReport() {
 }
 
 // ----- 股票／ETF -----
+// 首頁：每一檔持股＋全部加總
+function homeStocks(m) {
+  if (!S.holds.length) return '';
+  const hs = [...S.holds].sort((a, b) => holdVal(b) - holdVal(a));
+  const tot = sum(hs, holdVal), cost = sum(S.accounts.filter(a => a.type === 'invest' && S.holds.some(h => h.acc === a.id)), a => accBal(a, m)), pl = tot - cost;
+  return `<div class="card" data-a="gobs"><h2>股票／ETF（${hs.length} 檔）<span class="mu" style="float:right">明細 ›</span></h2>
+    ${hs.map(x => `<div class="row"><div>${esc(x.sym)} ${esc(x.name || '')}<div class="mu">${+x.shares || 0} 股${noPrice(x) ? '・<span class="neg">還沒有價格</span>' : ` × ${CUR[x.cur]}${+x.price}`}</div></div><div class="num">${money(holdVal(x))}</div></div>`).join('')}
+    <div class="row"><div><b>總市值 ${money(tot)}</b>${cost ? `<div class="mu">投入淨額 ${money(cost)}</div>` : ''}</div>${cost ? `<div class="num ${pl < 0 ? 'neg' : 'pos'}">${pl >= 0 ? '+' : ''}${money(pl)}<div class="mu">${(pl / cost * 100).toFixed(1)}%</div></div>` : ''}</div>
+    ${hs.some(noPrice) ? '<div class="mu neg">有持股還沒有價格，市值會少算。請到明細按「更新股價」，或點該檔手動填價格。</div>' : ''}</div>`;
+}
+const noPrice = x => !(+x.price > 0) || (x.cur !== 'TWD' && !fxOf(x.cur));
 function holdCard(m) {
   const invs = S.accounts.filter(a => a.type === 'invest' && !a.hide);
   let h = `<div class="card"><h2>股票／ETF</h2>`;
@@ -502,10 +519,11 @@ function holdCard(m) {
     const hs = S.holds.filter(x => x.acc === a.id), v = invVal(a), c = accBal(a, m), pl = v - c;
     if (invs.length > 1) h += `<div class="mu" style="margin-top:6px">${esc(a.name)}</div>`;
     h += hs.length ? hs.map(x => `<div class="row" data-a="holdEdit" data-id="${x.id}"><div><div>${esc(x.sym)} ${esc(x.name || '')}</div>
-        <div class="mu">${+x.shares || 0} 股 × ${CUR[x.cur]}${+x.price || 0}${x.pdate ? `（${x.pdate.slice(5)}）` : ''}${x.cur !== 'TWD' && !S.fx ? '・缺匯率' : ''}</div></div>
+        <div class="mu">${+x.shares || 0} 股${noPrice(x) ? '・<span class="neg">還沒有價格</span>' : ` × ${CUR[x.cur]}${+x.price}${x.pdate ? `（${x.pdate.slice(5)}）` : ''}`}</div></div>
         <div class="num">${money(holdVal(x))}</div><button class="btn sm sec" data-a="trade" data-id="${x.id}">買賣</button></div>`).join('') : '<div class="mu">還沒有持股，按下方新增。</div>';
     if (hs.length) h += `<div class="row"><div><b>市值 ${money(v)}</b><div class="mu">投入淨額 ${money(c)}（買進減賣出）</div></div><div class="num ${pl < 0 ? 'neg' : 'pos'}">${pl >= 0 ? '+' : ''}${money(pl)}${c > 0 ? `<div class="mu">${(pl / c * 100).toFixed(1)}%</div>` : ''}</div></div>`;
   }
+  if (invs.length > 1 && S.holds.length) h += `<div class="row"><b>全部投資帳戶合計</b><b class="num">${money(sum(S.holds, holdVal))}</b></div>`;
   return h + `<div class="grid2"><button class="btn sec" data-a="holdNew">＋ 新增持股</button><button class="btn sec" data-a="pxNow">更新股價</button></div>
     <div class="mu" style="margin-top:6px">台股、美股每天自動抓收盤價（FinMind）；日股和其他請手動填價格。股利請記成「收入 → 股利」。</div></div>`;
 }
