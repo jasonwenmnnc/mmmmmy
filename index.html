@@ -12,8 +12,8 @@
 <link rel="apple-touch-icon" href="icon-180.png">
 <title>公私記帳</title>
 <style>
-:root{--bg:#f5f5f4;--card:#fff;--tx:#1c1917;--mu:#78716c;--ln:#e7e5e4;--pri:#0f766e;--pri2:#ccfbf1;--co:#1d4ed8;--co2:#dbeafe;--me:#b45309;--me2:#fef3c7;--red:#dc2626;--grn:#15803d;--warn:#fef2f2;--warnt:#b91c1c}
-@media (prefers-color-scheme:dark){:root{--bg:#0c0a09;--card:#1c1917;--tx:#f5f5f4;--mu:#a8a29e;--ln:#292524;--pri:#14b8a6;--pri2:#134e4a;--co:#93c5fd;--co2:#1e3a8a;--me:#fcd34d;--me2:#78350f;--red:#f87171;--grn:#4ade80;--warn:#450a0a;--warnt:#fca5a5}}
+:root{--bg:#f5f5f4;--card:#fff;--tx:#1c1917;--mu:#78716c;--ln:#e7e5e4;--pri:#0f766e;--pri2:#ccfbf1;--co:#1d4ed8;--co2:#dbeafe;--me:#b45309;--me2:#fef3c7;--red:#dc2626;--grn:#15803d;--warn:#fef2f2;--warnt:#b91c1c;--inc:#0f766e;--ex:#d9622b}
+@media (prefers-color-scheme:dark){:root{--bg:#0c0a09;--card:#1c1917;--tx:#f5f5f4;--mu:#a8a29e;--ln:#292524;--pri:#14b8a6;--pri2:#134e4a;--co:#93c5fd;--co2:#1e3a8a;--me:#fcd34d;--me2:#78350f;--red:#f87171;--grn:#4ade80;--warn:#450a0a;--warnt:#fca5a5;--inc:#2dd4bf;--ex:#fb923c}}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.5 -apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif}
 header{position:sticky;top:0;z-index:5;background:var(--bg);padding:calc(env(safe-area-inset-top) + 10px) 16px 6px;display:flex;align-items:center;justify-content:space-between}
@@ -67,6 +67,14 @@ tr.tot td{font-weight:700;border-top:2px solid var(--tx)}
 .mnav button{border:0;background:var(--card);color:var(--tx);border-radius:8px;width:34px;height:34px;font-size:16px}
 #toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 14px);transform:translateX(-50%);background:var(--tx);color:var(--bg);padding:8px 16px;border-radius:20px;font-size:14px;opacity:0;transition:opacity .2s;z-index:20;pointer-events:none}
 #toast.on{opacity:1}
+.bar{margin:9px 0}.bar-l{display:flex;justify-content:space-between;gap:8px;font-size:14px}
+.bar-t{height:8px;background:var(--bg);border-radius:4px;overflow:hidden;margin-top:3px}
+.bar-t i{display:block;height:100%;border-radius:4px}
+i.in{background:var(--inc)}i.ex{background:var(--ex)}
+.lg{display:inline-flex;align-items:center;gap:4px;font-size:13px;color:var(--mu);margin-right:12px}.lg i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.tr{display:grid;grid-template-columns:40px 1fr 96px;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--ln);font-size:14px}
+.tr:last-child{border-bottom:0}.tr .bar-t{margin:2px 0}
+.stat3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;text-align:center;margin:4px 0 6px}.stat3 b{display:block;font-size:18px}
 .hint{font-size:13px;color:var(--pri);margin-top:6px}
 details summary{cursor:pointer;color:var(--mu);font-size:14px}
 a{color:var(--pri)}
@@ -89,6 +97,8 @@ const KEY = 'bk_v1';
 const LN = {co: '公司', me: '個人'};
 const TYPES = {bank: '銀行', cash: '現金', wallet: '電子錢包', card: '信用卡', loan: '貸款'};
 const TXT = {exp: '支出', inc: '收入', xfer: '轉帳', loan: '還貸款'};
+const CUR = {TWD: '$', USD: 'US$', JPY: '¥'}, CURN = {TWD: '台幣', USD: '美元', JPY: '日圓'};
+const FREQ = {m: '每月', q: '每季', y: '每年'};
 const pad = n => String(n).padStart(2, '0');
 const ymd = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
 const today = () => ymd(new Date());
@@ -98,12 +108,13 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '
 const isLia = a => a && (a.type === 'card' || a.type === 'loan');
 const sum = (arr, f = x => x) => arr.reduce((s, x) => s + f(x), 0);
 // 金額欄可輸入簡單算式，例如 120+35
-function calc(v) {
+function calcRaw(v) {
   v = String(v ?? '').replace(/,/g, '').trim();
   if (!v) return 0;
   if (!/^[\d+\-*/.() ]+$/.test(v)) return NaN;
-  try { const r = Function('return (' + v + ')')(); return Number.isFinite(r) ? Math.round(r) : NaN; } catch { return NaN; }
+  try { const r = Function('return (' + v + ')')(); return Number.isFinite(r) ? r : NaN; } catch { return NaN; }
 }
+const calc = v => Math.round(calcRaw(v));
 function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 1800); }
 
 // ===== 資料 =====
@@ -117,19 +128,32 @@ function seed() {
     a('公司貸款', 'co', 'loan', {rate: 0, pay: 0, day: 1}),
   ];
   const c = (ledger, kind, names) => names.split(',').map(name => ({id: uid(), ledger, kind, name}));
-  // 公司費用分類對應營所稅「損益及稅額計算表」常見項目
   const cats = [
-    ...c('co', 'exp', '進貨成本,薪資支出,租金支出,運費,廣告費,佣金支出,郵電費,文具用品,水電瓦斯費,保險費,修繕費,旅費,交際費,伙食費,職工福利,勞務費,稅捐,訓練費,書報雜誌,捐贈,什項支出'),
-    ...c('co', 'inc', '營業收入,利息收入,其他收入'),
+    ...c('co', 'exp', '進貨,運費,廣告,平台手續費,房租,薪資,水電網路,其他'),
+    ...c('co', 'inc', '營業收入,其他收入'),
     ...c('me', 'exp', '餐飲,交通,日用品,居家,保險,醫療,娛樂,服飾,學習,孝親,稅費,其他'),
     ...c('me', 'inc', '薪資,股利,其他收入'),
     {id: uid(), ledger: 'co', kind: 'exp', name: '利息支出', sys: 'int'},
     {id: uid(), ledger: 'me', kind: 'exp', name: '貸款利息', sys: 'int'},
   ];
-  return {v: 1, accounts, cats, txs: [], recs: [], openX: 0, days: {}, skips: {}, lastBackup: null, lastAcc: {}};
+  return {v: 2, accounts, cats, txs: [], recs: [], openX: 0, days: {}, skips: {}, lastBackup: null, lastAcc: {}};
 }
 function load() { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } }
 let S = load() || seed();
+// v1 → v2：公司分類精簡成 8 個（沒用過的舊分類隱藏，可在設定恢復）
+function migrate() {
+  if ((S.v || 1) < 2) {
+    const ren = {'進貨成本': '進貨', '廣告費': '廣告', '佣金支出': '平台手續費', '租金支出': '房租', '薪資支出': '薪資', '水電瓦斯費': '水電網路', '什項支出': '其他'};
+    const used = new Set([...S.txs.flatMap(t => (t.lines || []).map(l => l.cat)), ...S.recs.map(r => r.cat)]);
+    for (const c of S.cats) {
+      if (c.ledger !== 'co' || c.sys) continue;
+      if (ren[c.name]) c.name = ren[c.name];
+      else if (!['運費', '營業收入', '其他收入'].includes(c.name) && !used.has(c.id)) c.hide = true;
+    }
+    S.v = 2;
+  }
+}
+migrate();
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); }
   catch (e) { alert('儲存失敗：' + e.message + '\n請立刻到「設定 → 匯出備份」'); }
@@ -137,6 +161,24 @@ function save() {
 save();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
 
+// 匯率：每天第一次開啟時抓一次（台幣計價），失敗就沿用上次的
+async function fetchFx(force) {
+  if (!force && S.fx && S.fx.date === today()) return false;
+  const srcs = [
+    async () => { const d = await (await fetch('https://open.er-api.com/v6/latest/TWD')).json(); return {USD: 1 / d.rates.USD, JPY: 1 / d.rates.JPY}; },
+    async () => { const d = await (await fetch('https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/twd.json')).json(); return {USD: 1 / d.twd.usd, JPY: 1 / d.twd.jpy}; },
+  ];
+  for (const src of srcs) {
+    try {
+      const r = await src();
+      if (r.USD > 0 && r.JPY > 0 && Number.isFinite(r.USD) && Number.isFinite(r.JPY)) {
+        S.fx = {date: today(), USD: Math.round(r.USD * 1000) / 1000, JPY: Math.round(r.JPY * 10000) / 10000}; save(); return true;
+      }
+    } catch {}
+  }
+  return false;
+}
+const fxText = t => t.cur && t.cur !== 'TWD' ? `${CUR[t.cur]}${t.famt} × ${t.rate}` : '';
 const acc = id => S.accounts.find(a => a.id === id);
 const cat = id => S.cats.find(c => c.id === id);
 const intCat = L => S.cats.find(c => c.ledger === L && c.sys === 'int');
@@ -222,17 +264,19 @@ function dueItems() {
   for (const x of S.txs) if (x.type === 'loan') done.add('L' + x.loan + '@' + x.date.slice(0, 7));
   const out = [];
   const chk = (id, kind, obj, freq, day, month, start) => {
-    for (let k = -1; k <= 1; k++) {
-      let p, dd;
-      if (freq === 'm') {
+    const cands = [];
+    if (freq === 'y') {
+      for (let k = -1; k <= 1; k++) { const y = now.getFullYear() + k, dim = new Date(y, month, 0).getDate(); cands.push([String(y), ymd(new Date(y, month - 1, Math.min(day, dim)))]); }
+    } else {
+      const span = freq === 'q' ? 3 : 1;
+      for (let k = -span; k <= span; k++) {
         const d = new Date(now.getFullYear(), now.getMonth() + k, 1);
+        if (freq === 'q' && ((d.getMonth() - (month - 1)) % 3 + 3) % 3) continue; // 每季：只取起始月起每 3 個月
         const dim = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-        p = d.getFullYear() + '-' + pad(d.getMonth() + 1);
-        dd = ymd(new Date(d.getFullYear(), d.getMonth(), Math.min(day, dim)));
-      } else {
-        const y = now.getFullYear() + k, dim = new Date(y, month, 0).getDate();
-        p = String(y); dd = ymd(new Date(y, month - 1, Math.min(day, dim)));
+        cands.push([d.getFullYear() + '-' + pad(d.getMonth() + 1), ymd(new Date(d.getFullYear(), d.getMonth(), Math.min(day, dim)))]);
       }
+    }
+    for (const [p, dd] of cands) {
       const ref = id + '@' + p;
       if (dd < old || dd > lim || (start && dd < start) || done.has(ref) || S.skips[ref]) continue;
       out.push({ref, kind, obj, due: dd});
@@ -255,7 +299,7 @@ function streak() {
 }
 
 // ===== 畫面切換 =====
-let cur = 'home', ym = today().slice(0, 7), listF = 'all', repTab = 'pl';
+let cur = 'home', ym = today().slice(0, 7), listF = 'all', repTab = 'flow';
 const VIEWS = {home: ['首頁', vHome], list: ['明細', vList], report: ['報表', vReport], set: ['設定', vSet]};
 function render() {
   const [t, fn] = VIEWS[cur];
@@ -275,16 +319,16 @@ function vHome() {
   const m = balances(), owe = m['X:me'] || 0, st = streak(), td = !!S.days[today()];
   let h = `<div class="card"><div class="row" style="border:0;padding:0"><div><h2>連續記帳</h2><span class="bign">${st}</span> 天</div>
     ${td ? '<span class="mu">今天已打卡 ✓</span>' : '<button class="btn sm sec" data-a="nospend">今天沒有花費</button>'}</div></div>`;
-  h += `<div class="card"><h2>股東往來</h2>${Math.abs(owe) < 1 ? '<span class="bign">兩清</span>' :
+  h += `<div class="card"><h2>公私往來</h2>${Math.abs(owe) < 1 ? '<span class="bign">兩清</span>' :
     owe > 0 ? `公司欠你 <span class="bign num">${money(owe)}</span>` : `你欠公司 <span class="bign num neg">${money(-owe)}</span>`}
     <div class="mu">個人付公司費用會增加「公司欠你」；公司款進個人帳戶會增加「你欠公司」。</div></div>`;
   const due = dueItems();
   if (due.length) h += `<div class="card"><h2>待繳／待記帳</h2>${due.map(d => {
     const o = d.obj, late = d.due < today();
-    const amt = d.kind === 'loan' ? +o.pay : +o.amt;
+    const amt = d.kind === 'loan' ? money(+o.pay) : o.cur && o.cur !== 'TWD' ? CUR[o.cur] + o.amt : money(+o.amt);
     return `<div class="row"><div><div>${d.kind === 'loan' ? '🏦 ' : o.ins ? '<span class="tag ins">保險</span>' : ''}${esc(o.name)} <span class="tag ${o.ledger}">${LN[o.ledger]}</span></div>
       <div class="mu ${late ? 'neg' : ''}">${d.due}${late ? '（已過期）' : ''}</div></div>
-      <div class="num">${money(amt)}</div>
+      <div class="num">${amt}</div>
       <button class="btn sm" data-a="due" data-ref="${d.ref}">記帳</button><button class="btn sm sec" data-a="skip" data-ref="${d.ref}">略過</button></div>`;
   }).join('')}</div>`;
   const pend = S.txs.filter(isPending).length;
@@ -318,43 +362,61 @@ function vList() {
     const sign = t.type === 'inc' ? 'pos' : t.type === 'xfer' ? '' : '';
     const tags = txLedgers(t).map(L => `<span class="tag ${L}">${LN[L]}</span>`).join('') + (isPending(t) ? '<span class="tag pd">待分類</span>' : '');
     const sub = t.type === 'xfer' ? '' : esc(acc(t.acc)?.name || '');
-    h += `<div class="row" data-a="edit" data-id="${t.id}"><div><div>${tags}${esc(txTitle(t))}</div><div class="mu">${sub}${t.note ? '・' + esc(t.note) : ''}</div></div>
+    h += `<div class="row" data-a="edit" data-id="${t.id}"><div><div>${tags}${esc(txTitle(t))}</div><div class="mu">${sub}${fxText(t) ? '・' + fxText(t) : ''}${t.note ? '・' + esc(t.note) : ''}</div></div>
       <div class="num ${sign}">${t.type === 'inc' ? '+' : t.type === 'exp' || t.type === 'loan' ? '-' : ''}${money(t.amt)}</div></div>`;
   }
   return h + '</div>';
 }
 
 // ----- 報表 -----
-function plTable(L, mm) {
-  const y = mm.slice(0, 4), mE = {}, yE = {};
+// 某月某帳本：收入、支出（依分類），以及還貸款本金（不算花費）
+function monthFlow(L, mm) {
+  const inc = {}, exp = {}; let prin = 0;
   for (const t of S.txs) {
-    if (!t.date.startsWith(y)) continue;
+    if (!t.date.startsWith(mm)) continue;
+    if (t.type === 'loan' && acc(t.loan)?.ledger === L) prin += t.prin || 0;
     for (const l of jl(t)) {
       if (l.L !== L || !(l.k[0] === 'C' || l.k[0] === 'U')) continue;
-      yE[l.k] = (yE[l.k] || 0) + l.dr - l.cr;
-      if (t.date.startsWith(mm)) mE[l.k] = (mE[l.k] || 0) + l.dr - l.cr;
+      const kd = l.k[0] === 'U' ? (l.k.endsWith('exp') ? 'exp' : 'inc') : cat(l.k.slice(2))?.kind;
+      if (kd === 'exp') exp[l.k] = (exp[l.k] || 0) + l.dr - l.cr;
+      else inc[l.k] = (inc[l.k] || 0) + l.cr - l.dr;
     }
   }
-  const kind = k => k[0] === 'U' ? (k.endsWith('exp') ? 'exp' : 'inc') : cat(k.slice(2))?.kind;
-  const keys = Object.keys(yE);
-  const sec = (kd, title, sg) => {
-    const ks = keys.filter(k => kind(k) === kd).sort((a, b) => sg * (yE[a] - yE[b]));
-    const tm = sum(ks, k => sg * (mE[k] || 0)), ty = sum(ks, k => sg * yE[k]);
-    return [`<tr><th>${title}</th><th class="r">本月</th><th class="r">${y} 累計</th></tr>` + ks.map(k => `<tr><td>${esc(keyName(k))}</td><td class="r num">${money(sg * (mE[k] || 0))}</td><td class="r num">${money(sg * yE[k])}</td></tr>`).join('') +
-      `<tr class="tot"><td>${title}合計</td><td class="r num">${money(tm)}</td><td class="r num">${money(ty)}</td></tr>`, tm, ty];
-  };
-  const [ih, im, iy] = sec('inc', '收入', -1), [eh, em, ey] = sec('exp', '支出', 1);
-  return `<table>${ih}${eh}<tr class="tot"><td>${L === 'co' ? '本期淨利' : '結餘'}</td><td class="r num ${im - em < 0 ? 'neg' : ''}">${money(im - em)}</td><td class="r num ${iy - ey < 0 ? 'neg' : ''}">${money(iy - ey)}</td></tr></table>`;
+  return {inc, exp, ti: sum(Object.values(inc)), te: sum(Object.values(exp)), prin};
+}
+function bars(m, total, cls) {
+  const ks = Object.keys(m).filter(k => Math.round(m[k])).sort((a, b) => m[b] - m[a]);
+  if (!ks.length) return '<div class="mu">沒有紀錄</div>';
+  return ks.map(k => {
+    const p = total > 0 ? m[k] / total * 100 : 0;
+    return `<div class="bar"><div class="bar-l"><span>${esc(keyName(k))}</span><span class="num">${money(m[k])}<span class="mu"> ${Math.round(p)}%</span></span></div><div class="bar-t"><i class="${cls}" style="width:${Math.max(0, Math.min(100, p))}%"></i></div></div>`;
+  }).join('');
 }
 function vReport() {
   $('#hdx').innerHTML = monthNav();
-  const tabs = [['pl', '損益'], ['x', '股東往來'], ['jr', '日記簿'], ['tb', '試算表']];
+  const tabs = [['flow', '錢去哪'], ['trend', '每月趨勢'], ['x', '公私往來']];
+  if (!tabs.some(([k]) => k === repTab)) repTab = 'flow';
   let h = `<div class="seg" style="margin-top:6px">${tabs.map(([k, n]) => `<button data-a="rt" data-k="${k}" class="${repTab === k ? 'on' : ''}">${n}</button>`).join('')}</div>`;
   const end = ym + '-31';
-  if (repTab === 'pl') {
-    h += `<div class="card"><h2>公司損益</h2>${plTable('co', ym)}<div class="mu" style="margin-top:6px">金額含稅；營業稅拆算在第二階段處理。</div></div>`;
-    h += `<div class="card"><h2>個人收支</h2>${plTable('me', ym)}</div>`;
-  } else if (repTab === 'x') {
+  if (repTab === 'flow') {
+    for (const L of ['co', 'me']) {
+      const f = monthFlow(L, ym), net = f.ti - f.te;
+      h += `<div class="card"><h2>${LN[L]}・${+ym.slice(5)} 月</h2>
+        <div class="stat3"><div><span class="mu">收入</span><b class="num">${money(f.ti)}</b></div><div><span class="mu">支出</span><b class="num">${money(f.te)}</b></div><div><span class="mu">結餘</span><b class="num ${net < 0 ? 'neg' : ''}">${money(net)}</b></div></div>
+        <h2 style="margin-top:12px">錢花去哪</h2>${bars(f.exp, f.te, 'ex')}
+        ${f.prin ? `<div class="mu" style="margin-top:8px">另外還了貸款本金 ${money(f.prin)}（本金是在減少欠款，所以不算進支出）</div>` : ''}
+        ${f.ti ? `<h2 style="margin-top:14px">錢從哪來</h2>${bars(f.inc, f.ti, 'in')}` : ''}</div>`;
+    }
+  } else if (repTab === 'trend') {
+    const ms = [];
+    for (let k = 5; k >= 0; k--) { const [y, m] = ym.split('-').map(Number); const d = new Date(y, m - 1 - k, 1); ms.push(d.getFullYear() + '-' + pad(d.getMonth() + 1)); }
+    for (const L of ['co', 'me']) {
+      const fs = ms.map(m => monthFlow(L, m)), mx = Math.max(1, ...fs.map(f => Math.max(f.ti, f.te)));
+      h += `<div class="card"><h2>${LN[L]}・近 6 個月</h2><div><span class="lg"><i class="in"></i>收入</span><span class="lg"><i class="ex"></i>支出</span></div>
+        ${fs.map((f, i) => `<div class="tr"><span class="mu">${+ms[i].slice(5)}月</span><div><div class="bar-t"><i class="in" style="width:${f.ti / mx * 100}%"></i></div><div class="bar-t"><i class="ex" style="width:${f.te / mx * 100}%"></i></div></div>
+          <div class="num" style="text-align:right;font-size:13px">${money(f.ti)}<br>${money(f.te)}</div></div>`).join('')}</div>`;
+    }
+  } else {
     const rows = []; let run = +S.openX || 0;
     const ts = [...S.txs].sort((a, b) => a.date === b.date ? a.created - b.created : a.date < b.date ? -1 : 1);
     let startBal = run;
@@ -365,39 +427,20 @@ function vReport() {
       if (t.date > end) break;
       run += d; rows.push([t, d, run]);
     }
-    h += `<div class="card"><h2>股東往來明細（正數＝公司欠你）</h2><table><tr><th>日期</th><th>項目</th><th class="r">變動</th><th class="r">餘額</th></tr>
+    h += `<div class="card"><h2>公私往來明細（正數＝公司欠你）</h2><table><tr><th>日期</th><th>項目</th><th class="r">變動</th><th class="r">餘額</th></tr>
       <tr><td colspan="3">月初餘額</td><td class="r num">${money(startBal)}</td></tr>
       ${rows.map(([t, d, r]) => `<tr data-a="edit" data-id="${t.id}"><td class="num">${t.date.slice(5)}</td><td>${esc(txTitle(t))}<div class="mu">${esc(acc(t.acc)?.name)}${t.note ? '・' + esc(t.note) : ''}</div></td><td class="r num ${d < 0 ? 'neg' : ''}">${d > 0 ? '+' : ''}${money(d)}</td><td class="r num">${money(r)}</td></tr>`).join('')}
       <tr class="tot"><td colspan="3">月底餘額</td><td class="r num">${money(run)}</td></tr></table></div>`;
-  } else if (repTab === 'jr') {
-    for (const L of ['co', 'me']) {
-      const ts = S.txs.filter(t => t.date.startsWith(ym)).sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.created - b.created);
-      let body = '', td = 0, tc = 0;
-      for (const t of ts) {
-        const ls = jl(t).filter(l => l.L === L); if (!ls.length) continue;
-        ls.forEach((l, i) => { td += l.dr; tc += l.cr; body += `<tr><td class="num">${i ? '' : t.date.slice(5)}</td><td>${l.cr ? '　' : ''}${esc(keyName(l.k))}${i === ls.length - 1 && t.note ? `<div class="mu">${esc(t.note)}</div>` : ''}</td><td class="r num">${l.dr ? money(l.dr) : ''}</td><td class="r num">${l.cr ? money(l.cr) : ''}</td></tr>`; });
-      }
-      h += `<div class="card"><h2>${LN[L]}日記簿</h2>${body ? `<table><tr><th>日期</th><th>科目</th><th class="r">借</th><th class="r">貸</th></tr>${body}<tr class="tot"><td></td><td>合計</td><td class="r num">${money(td)}</td><td class="r num">${money(tc)}</td></tr></table>` : '<span class="mu">本月無分錄</span>'}</div>`;
-    }
-  } else {
-    const m = {};
-    const add = l => { if (!m[l.L]) m[l.L] = {}; m[l.L][l.k] = (m[l.L][l.k] || 0) + l.dr - l.cr; };
-    opening().forEach(add);
-    for (const t of S.txs) if (t.date <= end) jl(t).forEach(add);
-    for (const L of ['co', 'me']) {
-      // 排序：資產、負債、往來、淨值、收入、費用
-      const rank = k => { const [p, id] = k.split(':'); if (p === 'A') return isLia(acc(id)) ? 1 : 0; if (p === 'X') return 2; if (p === 'E') return 3; if (p === 'U') return k.endsWith('inc') ? 4 : 5; return cat(id)?.kind === 'inc' ? 4 : 5; };
-      const ks = Object.keys(m[L] || {}).filter(k => Math.abs(m[L][k]) > 0.5).sort((a, b) => rank(a) - rank(b) || keyName(a).localeCompare(keyName(b), 'zh-Hant'));
-      const td = sum(ks, k => Math.max(0, m[L][k])), tc = sum(ks, k => Math.max(0, -m[L][k]));
-      h += `<div class="card"><h2>${LN[L]}試算表（截至 ${ym} 月底）</h2><table><tr><th>科目</th><th class="r">借餘</th><th class="r">貸餘</th></tr>
-        ${ks.map(k => `<tr><td>${esc(keyName(k))}</td><td class="r num">${m[L][k] > 0 ? money(m[L][k]) : ''}</td><td class="r num">${m[L][k] < 0 ? money(-m[L][k]) : ''}</td></tr>`).join('')}
-        <tr class="tot"><td>合計 ${Math.round(td) === Math.round(tc) ? '✓ 平衡' : '✗ 不平衡'}</td><td class="r num">${money(td)}</td><td class="r num">${money(tc)}</td></tr></table></div>`;
-    }
   }
   return h;
 }
 
 // ----- 設定 -----
+function freqLabel(r) {
+  if (r.freq === 'y') return `每年 ${r.month}/${r.day}`;
+  if (r.freq === 'q') return `每季 ${r.day} 日（${[0, 1, 2, 3].map(i => (r.month - 1 + 3 * i) % 12 + 1).sort((a, b) => a - b).join('、')} 月）`;
+  return `每月 ${r.day} 日`;
+}
 let setL = 'co', setK = 'exp';
 function vSet() {
   let h = '';
@@ -405,7 +448,7 @@ function vSet() {
     h += `<div class="card"><h2>${LN[L]}帳戶</h2>${S.accounts.filter(a => a.ledger === L).map(a => `<div class="row" data-a="accEdit" data-id="${a.id}"><div>${esc(a.name)} <span class="mu">${TYPES[a.type]}${a.hide ? '・已隱藏' : ''}${a.type === 'loan' ? `・月繳 ${money(+a.pay || 0)}・年利率 ${+a.rate || 0}%` : ''}</span></div><span class="mu">編輯 ›</span></div>`).join('')}</div>`;
   }
   h += `<button class="btn sec" data-a="accNew">＋ 新增帳戶／信用卡／貸款</button>`;
-  h += `<div class="card" style="margin-top:16px"><h2>定期支出／保險</h2>${S.recs.length ? S.recs.map(r => `<div class="row" data-a="recEdit" data-id="${r.id}"><div>${r.ins ? '<span class="tag ins">保險</span>' : ''}${esc(r.name)} <span class="tag ${r.ledger}">${LN[r.ledger]}</span><div class="mu">${r.freq === 'm' ? `每月 ${r.day} 日` : `每年 ${r.month}/${r.day}`}${r.off ? '・已停用' : ''}</div></div><span class="num">${money(+r.amt)}</span></div>`).join('') : '<span class="mu">還沒有設定。保險、房租、訂閱都可以加在這裡，到期前 7 天會出現在首頁。</span>'}</div>
+  h += `<div class="card" style="margin-top:16px"><h2>定期支出／保險</h2>${S.recs.length ? S.recs.map(r => `<div class="row" data-a="recEdit" data-id="${r.id}"><div>${r.ins ? '<span class="tag ins">保險</span>' : ''}${esc(r.name)} <span class="tag ${r.ledger}">${LN[r.ledger]}</span><div class="mu">${freqLabel(r)}${r.off ? '・已停用' : ''}</div></div><span class="num">${r.cur && r.cur !== 'TWD' ? CUR[r.cur] + r.amt : money(+r.amt)}</span></div>`).join('') : '<span class="mu">還沒有設定。保險、房租、訂閱都可以加在這裡，到期前 7 天會出現在首頁。</span>'}</div>
     <button class="btn sec" data-a="recNew">＋ 新增定期支出／保險</button>`;
   const cs = S.cats.filter(c => c.ledger === setL && c.kind === setK);
   h += `<div class="card" style="margin-top:16px"><h2>分類</h2>
@@ -413,7 +456,9 @@ function vSet() {
     <div class="seg">${['exp', 'inc'].map(k => `<button data-a="setK" data-k="${k}" class="${setK === k ? 'on' : ''}">${TXT[k]}</button>`).join('')}</div></div>
     <div class="chips" style="margin-top:10px">${cs.map(c => `<button class="chip" data-a="catEdit" data-id="${c.id}" style="${c.hide ? 'opacity:.4' : ''}">${esc(c.name)}</button>`).join('')}<button class="chip" data-a="catNew">＋ 新增</button></div>
     <div class="mu" style="margin-top:6px">點分類可改名或隱藏。</div></div>`;
-  h += `<div class="card"><h2>期初股東往來</h2><div class="mu">開始用這個 App 之前，公司已經欠你多少錢？（你欠公司就填負數）</div>
+  h += `<div class="card"><h2>匯率（自動連網更新）</h2><div class="mu">${S.fx ? `1 美元 = ${S.fx.USD} 台幣、1 日圓 = ${S.fx.JPY} 台幣（${S.fx.date}）` : '還沒抓到匯率，連上網路後按更新。'}</div>
+    <button class="btn sec sm" style="margin-top:8px" data-a="fxNow">立即更新</button></div>
+  <div class="card"><h2>期初公私往來</h2><div class="mu">開始用這個 App 之前，公司已經欠你多少錢？（你欠公司就填負數）</div>
     <div class="row" style="border:0"><input id="openX" inputmode="decimal" value="${+S.openX || ''}" placeholder="0"><button class="btn sm" data-a="saveOpenX">儲存</button></div></div>`;
   h += `<div class="card"><h2>備份（重要）</h2><div class="mu">資料只存在這支手機的瀏覽器裡。手機遺失、重置，或刪掉主畫面圖示，資料就會消失。請定期匯出，存到雲端硬碟或傳給自己。</div>
     <div class="mu">上次備份：${S.lastBackup ? ymd(new Date(S.lastBackup)) : '從未'}</div>
@@ -421,7 +466,7 @@ function vSet() {
     <input type="file" id="impFile" accept="application/json,.json" style="display:none"></div>`;
   h += `<div class="card"><details><summary>每天提醒記帳（iPhone 設定方式）</summary><div class="mu" style="margin-top:6px">
     網頁 App 無法自己定時通知，請改用 iPhone 內建「捷徑」：<br>捷徑 → 自動化 → ＋ → 特定時間（例如每天 21:00）→ 立即執行 → 動作選「打開 App」或「打開 URL」填這個 App 的網址。</div></details></div>
-    <div class="mu" style="text-align:center">公私記帳 第一階段・共 ${S.txs.length} 筆交易</div>`;
+    <div class="mu" style="text-align:center">公私記帳・共 ${S.txs.length} 筆交易</div>`;
   return h;
 }
 
@@ -440,12 +485,14 @@ function openTx(tx, preset) {
   else {
     const t = preset?.type || 'exp';
     const a0 = acc(S.lastAcc[t]) && !acc(S.lastAcc[t]).hide ? S.lastAcc[t] : formAccs()[0]?.id;
-    F = {type: t, amt: '', acc: a0, to: '', loan: '', prin: '', int: '', lines: [{ledger: acc(a0)?.ledger || 'me', cat: '', amt: 0, inv: false}], date: today(), note: '', ...preset};
+    F = {type: t, cur: 'TWD', rate: '', twd: '', amt: '', acc: a0, to: '', loan: '', prin: '', int: '', lines: [{ledger: acc(a0)?.ledger || 'me', cat: '', amt: 0, inv: false}], date: today(), note: '', ...preset};
   }
   F.lines = F.lines || [{ledger: acc(F.acc)?.ledger || 'me', cat: '', amt: 0, inv: false}];
   if (tx && F.lines.length > 1) { F.lines = F.lines.map((l, i) => ({...l, amt: i ? l.amt : 0})); }
   F.edit = !!tx; F.manual = !!tx || !!preset?.lines;
-  F.amt = tx ? String(tx.amt) : String(F.amt || '');
+  F.cur = F.cur || 'TWD';
+  F.amt = tx ? String(F.cur !== 'TWD' ? tx.famt : tx.amt) : String(F.amt || '');
+  if (tx && F.cur !== 'TWD') { F.twd = String(tx.amt); F.rate = String(tx.rate); }
   if (tx && tx.type === 'loan') { F.prin = String(tx.prin); F.int = String(tx.int); }
   renderForm();
   if (!tx && F.type !== 'loan') $('#fAmt').focus();
@@ -458,10 +505,19 @@ function readForm() {
   if (v('fNote') !== undefined) F.note = v('fNote');
   if (v('fPrin') !== undefined) F.prin = v('fPrin');
   if (v('fInt') !== undefined) F.int = v('fInt');
+  if (v('fRate') !== undefined) F.rate = v('fRate');
+  if (v('fTwd') !== undefined) F.twd = v('fTwd');
   F.lines.forEach((l, i) => { if (i && v('sA' + i) !== undefined) l.amt = v('sA' + i); });
 }
+const isFx = () => F.type !== 'loan' && F.cur && F.cur !== 'TWD';
+// 表單的台幣總額（外幣 = 台幣金額欄，沒填就用 外幣×匯率）
+function twdTotal() {
+  if (!isFx()) return calc(F.amt);
+  const v = calc(F.twd);
+  return v > 0 ? v : Math.round((calcRaw(F.amt) || 0) * (parseFloat(F.rate) || 0));
+}
 function draftTx() {
-  const total = calc(F.amt);
+  const total = twdTotal();
   const t = {type: F.type, acc: F.acc, to: F.to, amt: total, date: F.date};
   if (F.type === 'exp' || F.type === 'inc') {
     const extra = F.lines.slice(1).map(l => ({...l, amt: calc(l.amt)})).filter(l => l.amt > 0);
@@ -471,7 +527,7 @@ function draftTx() {
   return t;
 }
 function crossHint() {
-  const total = calc(F.amt); if (!(total > 0) || !acc(F.acc)) return '';
+  const total = twdTotal(); if (!(total > 0) || !acc(F.acc)) return '';
   if (F.type === 'xfer' && !acc(F.to)) return '';
   if (F.type === 'loan' && !acc(F.loan)) return '';
   const d = sum(jl(draftTx()).filter(l => l.k === 'X:me'), l => l.dr - l.cr);
@@ -482,14 +538,16 @@ function renderForm() {
   const t = F.type, L0 = F.lines[0].ledger;
   let h = `<div class="shd"><b>${F.edit ? '編輯紀錄' : '記一筆'}</b><button class="x" data-a="close">✕</button></div>`;
   h += seg('fType', Object.entries(TXT), t);
-  h += `<label class="f">金額（可輸入算式，如 120+35）</label><input id="fAmt" class="big" inputmode="decimal" autocomplete="off" value="${esc(F.amt)}" placeholder="0">`;
+  if (t !== 'loan') h += `<div style="margin-top:10px">${seg('fCur', Object.entries(CURN), F.cur)}</div>`;
+  h += `<label class="f">金額${isFx() ? '（' + CURN[F.cur] + '）' : ''}（可輸入算式，如 120+35）</label><input id="fAmt" class="big" inputmode="decimal" autocomplete="off" value="${esc(F.amt)}" placeholder="0">`;
+  if (isFx()) h += `<div class="grid2"><div><label class="f">匯率（1 ${CURN[F.cur]} = ? 台幣）</label><input id="fRate" inputmode="decimal" value="${esc(F.rate)}"></div><div><label class="f">台幣金額</label><input id="fTwd" inputmode="decimal" value="${esc(F.twd)}"></div></div>
+    <div class="mu" style="margin-top:4px">${S.fx ? `網路匯率（${S.fx.date}）。刷卡實際扣款以帳單為準，可以直接改台幣金額。` : '還沒抓到網路匯率，請手動填匯率。'}</div>`;
   const accList = formAccs().map(a => [a.id, a.name]);
   if (t === 'exp' || t === 'inc') {
     h += `<label class="f">${t === 'exp' ? '從哪個帳戶付' : '收到哪個帳戶'}</label>${chips('fAcc', accList, F.acc)}`;
     h += `<label class="f">這筆屬於</label>${seg('fLed', [['co', '公司'], ['me', '個人']], L0)}`;
     const cs = S.cats.filter(c => c.ledger === L0 && c.kind === t && !c.hide && !c.sys).map(c => [c.id, c.name]);
     h += `<label class="f">分類（可先不選，之後再整理）</label>${chips('fCat', cs, F.lines[0].cat)}`;
-    if (L0 === 'co') h += `<label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:14px"><input type="checkbox" id="fInv" ${F.lines[0].inv ? 'checked' : ''}> 有開立統編發票／收據</label>`;
     F.lines.forEach((l, i) => {
       if (!i) return;
       const cs2 = S.cats.filter(c => c.ledger === l.ledger && c.kind === t && !c.hide && !c.sys);
@@ -497,7 +555,7 @@ function renderForm() {
         <select data-s="cat" data-i="${i}"><option value="">待分類</option>${cs2.map(c => `<option value="${c.id}" ${l.cat === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
         <input id="sA${i}" inputmode="decimal" value="${esc(l.amt || '')}" placeholder="金額"><button class="x" data-a="sDel" data-i="${i}">✕</button></div>`;
     });
-    if (F.lines.length > 1) h += `<div class="mu" style="margin-top:4px">上方分類分到的金額＝總額扣掉拆出去的：<span id="fRest">${money((calc(F.amt) || 0) - sum(F.lines.slice(1), l => calc(l.amt) || 0))}</span></div>`;
+    if (F.lines.length > 1) h += `<div class="mu" style="margin-top:4px">拆帳金額都用台幣。上方分類分到的金額＝總額扣掉拆出去的：<span id="fRest">${money(twdTotal() - sum(F.lines.slice(1), l => calc(l.amt) || 0))}</span></div>`;
     h += `<button class="btn sec sm" style="margin-top:10px" data-a="sAdd">＋ 拆帳（一張單據有公有私）</button>`;
   } else if (t === 'xfer') {
     h += `<label class="f">從</label>${chips('fAcc', accList, F.acc)}<label class="f">到（繳卡費也用轉帳）</label>${chips('fTo', accList.filter(([k]) => k !== F.acc), F.to)}`;
@@ -525,14 +583,17 @@ $('#sheet').addEventListener('input', e => {
   readForm();
   if (e.target.id === 'fAmt' && F.type === 'loan') reloanSplit(false);
   if (e.target.id === 'fInt') reloanSplit(true);
-  if (e.target.id === 'fInv') F.lines[0].inv = e.target.checked;
+  if (isFx()) {
+    const fa = calcRaw(F.amt) || 0;
+    if (e.target.id === 'fAmt' || e.target.id === 'fRate') { F.twd = fa && parseFloat(F.rate) ? String(Math.round(fa * parseFloat(F.rate))) : ''; $('#fTwd').value = F.twd; }
+    if (e.target.id === 'fTwd' && fa > 0 && calc(F.twd) > 0) { F.rate = String(Math.round(calc(F.twd) / fa * 10000) / 10000); $('#fRate').value = F.rate; }
+  }
   const hint = $('#fHint'); if (hint) hint.innerHTML = crossHint();
-  const rest = $('#fRest'); if (rest) rest.textContent = money((calc(F.amt) || 0) - sum(F.lines.slice(1), l => calc(l.amt) || 0));
+  const rest = $('#fRest'); if (rest) rest.textContent = money(twdTotal() - sum(F.lines.slice(1), l => calc(l.amt) || 0));
 });
 $('#sheet').addEventListener('change', e => {
   if (!F) return;
   const s = e.target.dataset.s, i = +e.target.dataset.i;
-  if (e.target.id === 'fInv') F.lines[0].inv = e.target.checked;
   if (!s) return;
   readForm();
   if (s === 'led') { F.lines[i].ledger = e.target.value; F.lines[i].cat = ''; }
@@ -541,11 +602,13 @@ $('#sheet').addEventListener('change', e => {
 });
 function saveTx() {
   readForm();
-  const total = calc(F.amt);
-  if (!(total > 0)) return toast('請輸入正確金額');
+  const total = twdTotal();
+  if (isFx() && !(calcRaw(F.amt) > 0)) return toast('請輸入正確的外幣金額');
+  if (!(total > 0)) return toast(isFx() ? '請填匯率或台幣金額' : '請輸入正確金額');
   if (!acc(F.acc)) return toast('請選帳戶');
   const t = {id: F.id || uid(), type: F.type, date: F.date || today(), acc: F.acc, amt: total, note: (F.note || '').trim(), created: F.created || Date.now()};
   if (F.ref) t.ref = F.ref;
+  if (isFx()) { t.cur = F.cur; t.famt = Math.round(calcRaw(F.amt) * 100) / 100; t.rate = Math.round(total / t.famt * 10000) / 10000; }
   if (F.type === 'exp' || F.type === 'inc') {
     const d = draftTx();
     const rest = total - sum(F.lines.slice(1), l => calc(l.amt) || 0);
@@ -602,17 +665,17 @@ function saveAcc(id) {
 
 // ----- 定期／保險表單 -----
 function openRec(r) {
-  const n = !r; r = r || {id: '', name: '', ledger: 'me', amt: '', acc: formAccs()[0]?.id, cat: '', freq: 'm', day: 1, month: 1, ins: false, start: today()};
+  const n = !r; r = r || {id: '', name: '', ledger: 'me', cur: 'TWD', amt: '', acc: formAccs()[0]?.id, cat: '', freq: 'm', day: 1, month: 1, ins: false, start: today()};
   const cats = S.cats.filter(c => c.kind === 'exp' && !c.sys && !c.hide);
   let h = `<div class="shd"><b>${n ? '新增定期支出' : '編輯定期支出'}</b><button class="x" data-a="close">✕</button></div>
     <label class="f">名稱</label><input id="rName" value="${esc(r.name)}" placeholder="例：國泰壽險、辦公室房租">
     <label style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="rIns" ${r.ins ? 'checked' : ''}> 這是保險</label>
     <div class="grid2"><div><label class="f">屬於</label><select id="rLed">${['co', 'me'].map(L => `<option value="${L}" ${r.ledger === L ? 'selected' : ''}>${LN[L]}</option>`).join('')}</select></div>
-    <div><label class="f">金額</label><input id="rAmt" inputmode="decimal" value="${esc(r.amt)}"></div>
+    <div><label class="f">金額</label><div style="display:flex;gap:4px"><select id="rCur" style="width:92px;flex:none">${Object.entries(CURN).map(([k, n]) => `<option value="${k}" ${(r.cur || 'TWD') === k ? 'selected' : ''}>${n}</option>`).join('')}</select><input id="rAmt" inputmode="decimal" value="${esc(r.amt)}"></div></div>
     <div><label class="f">扣款帳戶</label><select id="rAcc">${formAccs().map(a => `<option value="${a.id}" ${r.acc === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></div>
     <div><label class="f">分類</label><select id="rCat">${cats.map(c => `<option value="${c.id}" data-l="${c.ledger}" ${r.cat === c.id ? 'selected' : ''}>${LN[c.ledger]}・${esc(c.name)}</option>`).join('')}</select></div>
-    <div><label class="f">頻率</label><select id="rFreq"><option value="m" ${r.freq === 'm' ? 'selected' : ''}>每月</option><option value="y" ${r.freq === 'y' ? 'selected' : ''}>每年</option></select></div>
-    <div><label class="f">月份（每年才需要）</label><input id="rMonth" inputmode="numeric" value="${+r.month || 1}"></div>
+    <div><label class="f">頻率</label><select id="rFreq">${Object.entries(FREQ).map(([k, n]) => `<option value="${k}" ${r.freq === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+    <div><label class="f">月份（每年＝扣款月；每季＝第一次扣款月）</label><input id="rMonth" inputmode="numeric" value="${+r.month || 1}"></div>
     <div><label class="f">日</label><input id="rDay" inputmode="numeric" value="${+r.day || 1}"></div>
     <div><label class="f">從哪天開始</label><input id="rStart" type="date" value="${esc(r.start || today())}"></div></div>
     <label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input type="checkbox" id="rOff" ${r.off ? 'checked' : ''}> 停用</label>
@@ -623,10 +686,11 @@ function openRec(r) {
   $('#rLed').onchange = sync; sync();
 }
 function saveRec(id) {
-  const name = $('#rName').value.trim(), amt = calc($('#rAmt').value);
+  const rc = $('#rCur').value, ra = calcRaw($('#rAmt').value), name = $('#rName').value.trim();
+  const amt = rc === 'TWD' ? Math.round(ra) : Math.round(ra * 100) / 100;
   if (!name) return toast('請填名稱'); if (!(amt > 0)) return toast('請填金額');
   const o = id ? S.recs.find(r => r.id === id) : {id: uid()};
-  Object.assign(o, {name, ins: $('#rIns').checked, ledger: $('#rLed').value, amt, acc: $('#rAcc').value, cat: $('#rCat').value, freq: $('#rFreq').value,
+  Object.assign(o, {name, ins: $('#rIns').checked, ledger: $('#rLed').value, cur: rc, amt, acc: $('#rAcc').value, cat: $('#rCat').value, freq: $('#rFreq').value,
     month: Math.min(12, Math.max(1, parseInt($('#rMonth').value) || 1)), day: Math.min(31, Math.max(1, parseInt($('#rDay').value) || 1)), start: $('#rStart').value, off: $('#rOff').checked});
   if (!id) S.recs.push(o);
   save(); closeSheet(); render(); toast('已儲存');
@@ -678,11 +742,23 @@ document.addEventListener('click', e => {
       if (d.kind === 'loan') {
         const s = loanSplit(o, +o.pay);
         openTx(null, {type: 'loan', loan: o.id, acc: acc(o.payAcc) ? o.payAcc : formAccs()[0]?.id, amt: o.pay, prin: String(s.prin), int: String(s.int), date: d.due, ref: d.ref, note: ''});
+      } else if (o.cur && o.cur !== 'TWD') {
+        const rate = S.fx?.[o.cur] || '';
+        openTx(null, {type: 'exp', cur: o.cur, rate: String(rate), twd: rate ? String(Math.round(o.amt * rate)) : '', acc: o.acc, amt: o.amt, lines: [{ledger: o.ledger, cat: o.cat, amt: 0, inv: false}], date: d.due, ref: d.ref, note: o.name});
       } else openTx(null, {type: 'exp', acc: o.acc, amt: o.amt, lines: [{ledger: o.ledger, cat: o.cat, amt: 0, inv: false}], date: d.due, ref: d.ref, note: o.name});
       return;
     }
     // 記帳表單
-    case 'fType': F.type = k; if (k === 'loan' && !F.loan) { const l = liveAccs(x => x.type === 'loan')[0]; if (l) { F.loan = l.id; if (acc(l.payAcc)) F.acc = l.payAcc; if (!F.amt && l.pay) F.amt = String(l.pay); } } if (k === 'loan') { const l = acc(F.loan); const tt = calc(F.amt); if (l && tt > 0) { const s = loanSplit(l, tt); F.prin = String(s.prin); F.int = String(s.int); } } return renderForm();
+    case 'fCur': {
+      F.cur = k;
+      if (k !== 'TWD') {
+        F.rate = String(S.fx?.[k] || ''); const fa = calcRaw(F.amt) || 0; F.twd = fa && F.rate ? String(Math.round(fa * F.rate)) : '';
+        fetchFx().then(ok => { if (ok && F && F.cur === k) { F.rate = String(S.fx[k]); const fa2 = calcRaw(F.amt) || 0; F.twd = fa2 ? String(Math.round(fa2 * S.fx[k])) : ''; renderForm(); } });
+      }
+      return renderForm();
+    }
+    case 'fxNow': fetchFx(true).then(ok => { render(); toast(ok ? '匯率已更新' : '更新失敗，請確認網路'); }); return;
+    case 'fType': if (k === 'loan') F.cur = 'TWD'; F.type = k; if (k === 'loan' && !F.loan) { const l = liveAccs(x => x.type === 'loan')[0]; if (l) { F.loan = l.id; if (acc(l.payAcc)) F.acc = l.payAcc; if (!F.amt && l.pay) F.amt = String(l.pay); } } if (k === 'loan') { const l = acc(F.loan); const tt = calc(F.amt); if (l && tt > 0) { const s = loanSplit(l, tt); F.prin = String(s.prin); F.int = String(s.int); } } return renderForm();
     case 'fAcc': F.acc = k; if (!F.manual && F.lines) { F.lines[0].ledger = acc(k).ledger; F.lines[0].cat = ''; } return renderForm();
     case 'fTo': F.to = k; return renderForm();
     case 'fLed': if (F.lines[0].ledger !== k) { F.lines[0].ledger = k; F.lines[0].cat = ''; } F.manual = true; return renderForm();
@@ -718,6 +794,7 @@ document.addEventListener('click', e => {
 document.addEventListener('change', e => { if (e.target.id === 'impFile' && e.target.files[0]) { importData(e.target.files[0]); e.target.value = ''; } });
 
 render();
+if (navigator.onLine) fetchFx().then(ok => { if (ok && cur === 'set') render(); });
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
