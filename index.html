@@ -67,6 +67,8 @@ tr.tot td{font-weight:700;border-top:2px solid var(--tx)}
 .mnav button{border:0;background:var(--card);color:var(--tx);border-radius:8px;width:34px;height:34px;font-size:16px}
 #toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 14px);transform:translateX(-50%);background:var(--tx);color:var(--bg);padding:8px 16px;border-radius:20px;font-size:14px;opacity:0;transition:opacity .2s;z-index:20;pointer-events:none}
 #toast.on{opacity:1}
+#upd{display:none;position:fixed;left:16px;right:16px;bottom:calc(140px + env(safe-area-inset-bottom));background:var(--pri);color:#fff;text-align:center;padding:12px;border-radius:12px;font-weight:700;z-index:8;box-shadow:0 4px 14px rgba(0,0,0,.25)}
+#upd.on{display:block}
 .bar{margin:9px 0}.bar-l{display:flex;justify-content:space-between;gap:8px;font-size:14px}
 .bar-t{height:8px;background:var(--bg);border-radius:4px;overflow:hidden;margin-top:3px}
 .bar-t i{display:block;height:100%;border-radius:4px}
@@ -90,8 +92,10 @@ a{color:var(--pri)}
 <div id="mask"></div>
 <section id="sheet"></section>
 <div id="toast"></div>
+<div id="upd" data-a="doUpdate">有新版本，點這裡更新 ↻</div>
 <script>
 // ===== 基礎 =====
+const APP_VER = '2026.10.09-5'; // 每次改版都要改，手機才會偵測到新版
 const $ = s => document.querySelector(s);
 const KEY = 'bk_v1';
 const LN = {co: '公司', me: '個人'};
@@ -644,7 +648,7 @@ function vSet() {
     <input type="file" id="impFile" accept="application/json,.json" style="display:none"></div>`;
   h += `<div class="card"><details><summary>每天提醒記帳（iPhone 設定方式）</summary><div class="mu" style="margin-top:6px">
     網頁 App 無法自己定時通知，請改用 iPhone 內建「捷徑」：<br>捷徑 → 自動化 → ＋ → 特定時間（例如每天 21:00）→ 立即執行 → 動作選「打開 App」或「打開 URL」填這個 App 的網址。</div></details></div>
-    <div class="mu" style="text-align:center">公私記帳・共 ${S.txs.length} 筆交易</div>`;
+    <div class="mu" style="text-align:center">公私記帳 版本 ${APP_VER}・共 ${S.txs.length} 筆交易</div>`;
   return h;
 }
 
@@ -952,6 +956,7 @@ document.addEventListener('click', e => {
     case 'trAcc': readTrade(); TR.acc = k; return openTrade(S.holds.find(h => h.id === TR.id));
     case 'trSave': return saveTrade(id);
     case 'pxNow': toast('更新中…'); fetchPrices(true).then(n => { render(); toast(n ? `已更新 ${n} 檔` : '沒有可自動更新的持股，或網路／代號有問題'); }); return;
+    case 'doUpdate': return doUpdate();
     case 'fxNow': fetchFx(true).then(ok => { render(); toast(ok ? '匯率已更新' : '更新失敗，請確認網路'); }); return;
     case 'fType': if (k === 'loan') F.cur = 'TWD'; F.type = k; if (k === 'loan' && !F.loan) { const l = liveAccs(x => x.type === 'loan')[0]; if (l) { F.loan = l.id; if (acc(l.payAcc)) F.acc = l.payAcc; if (!F.amt && l.pay) F.amt = String(l.pay); } } if (k === 'loan') { const l = acc(F.loan); const tt = calc(F.amt); if (l && tt > 0) { const s = loanSplit(l, tt); F.prin = String(s.prin); F.int = String(s.int); } } return renderForm();
     case 'fAcc': F.acc = k; if (!F.manual && F.lines) { F.lines[0].ledger = acc(k).ledger; F.lines[0].cat = ''; } return renderForm();
@@ -987,6 +992,26 @@ document.addEventListener('click', e => {
   }
 });
 document.addEventListener('change', e => { if (e.target.id === 'impFile' && e.target.files[0]) { importData(e.target.files[0]); e.target.value = ''; } });
+
+// 版本檢查：開 App 和從背景切回來時，比對網站上的版本
+async function checkUpdate() {
+  if (!navigator.onLine || location.protocol === 'file:') return;
+  try {
+    const h = await (await fetch('index.html?v=' + Date.now(), {cache: 'no-store'})).text();
+    const v = h.match(/APP_VER = '([^']+)'/)?.[1];
+    $('#upd').classList.toggle('on', !!v && v !== APP_VER);
+  } catch {}
+}
+async function doUpdate() {
+  $('#upd').textContent = '更新中…';
+  try {
+    const r = await navigator.serviceWorker?.getRegistration(); await r?.update();
+    for (const k of await caches.keys()) await caches.delete(k);
+  } catch {}
+  location.reload();
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
+setTimeout(checkUpdate, 1500);
 
 render();
 if (navigator.onLine) Promise.all([fetchFx(), fetchPrices()]).then(([a, b]) => { if ((a || b) && !F && !$('#sheet').classList.contains('on')) render(); });
