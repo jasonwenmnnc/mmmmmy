@@ -95,7 +95,7 @@ a{color:var(--pri)}
 <div id="upd" data-a="doUpdate">有新版本，點這裡更新 ↻</div>
 <script>
 // ===== 基礎 =====
-const APP_VER = '2026.10.09-5'; // 每次改版都要改，手機才會偵測到新版
+const APP_VER = '2026.10.09-6'; // 每次改版都要改，手機才會偵測到新版
 const $ = s => document.querySelector(s);
 const KEY = 'bk_v1';
 const LN = {co: '公司', me: '個人'};
@@ -163,6 +163,8 @@ function migrate() {
     S.v = 3;
   }
   S.holds = S.holds || [];
+  // 持股所屬的投資帳戶被刪掉時，補一個投資帳戶並把持股移過去
+  if (S.holds.some(h => !S.accounts.some(a => a.id === h.acc))) ensureInvest();
 }
 migrate();
 function save() {
@@ -540,7 +542,16 @@ function holdCard(m) {
   return h + `<div class="grid2"><button class="btn sec" data-a="holdNew">＋ 新增持股</button><button class="btn sec" data-a="pxNow">更新股價</button></div>
     <div class="mu" style="margin-top:6px">台股、美股每天自動抓收盤價（FinMind）；日股和其他請手動填價格。股利請記成「收入 → 股利」。</div></div>`;
 }
+// 確保至少有一個投資帳戶（被刪掉就自動補回）
+function ensureInvest() {
+  let a = S.accounts.find(x => x.type === 'invest' && !x.hide) || S.accounts.find(x => x.type === 'invest');
+  if (!a) { a = {id: uid(), name: '股票投資', ledger: 'me', type: 'invest', open: 0}; S.accounts.push(a); }
+  if (a.hide) a.hide = false;
+  for (const h of S.holds) if (!S.accounts.some(x => x.id === h.acc)) h.acc = a.id;
+  save(); return a;
+}
 function openHold(x) {
+  if (!x) ensureInvest();
   const n = !x; x = x || {id: '', sym: '', name: '', mkt: 'TW', shares: '', price: '', acc: S.accounts.find(a => a.type === 'invest')?.id};
   F = null;
   const auto = ['TW', 'US'].includes(x.mkt);
@@ -815,7 +826,7 @@ const openLabel = t => t === 'invest' ? '開始記帳時已投入的成本（用
 function openAcc(a) {
   const n = !a; a = a || {id: '', name: '', ledger: 'me', type: 'bank', open: 0};
   F = null;
-  const used = a.id && S.txs.some(t => t.acc === a.id || t.to === a.id || t.loan === a.id);
+  const used = a.id && (S.txs.some(t => t.acc === a.id || t.to === a.id || t.loan === a.id) || S.holds.some(h => h.acc === a.id));
   const bankList = S.accounts.filter(x => x.type !== 'loan');
   let h = `<div class="shd"><b>${n ? '新增帳戶' : '編輯帳戶'}</b><button class="x" data-a="close">✕</button></div>
     <label class="f">名稱</label><input id="aName" value="${esc(a.name)}" placeholder="例：國泰公司戶">
@@ -832,7 +843,7 @@ function openAcc(a) {
     <label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input type="checkbox" id="aHide" ${a.hide ? 'checked' : ''}> 隱藏（不再使用，但保留歷史紀錄）</label>
     <button class="btn" data-a="accSave" data-id="${a.id}">儲存</button>
     ${!n && !used ? `<button class="btn del" data-a="accDel" data-id="${a.id}">刪除帳戶</button>` : ''}
-    ${used ? '<div class="mu" style="margin-top:8px">此帳戶已有交易，無法刪除或改類型；不用了可勾選隱藏。</div>' : ''}`;
+    ${used ? '<div class="mu" style="margin-top:8px">此帳戶已有交易或持股，無法刪除或改類型；不用了可勾選隱藏。</div>' : ''}`;
   showSheet(h);
   $('#aType').onchange = e => { $('#loanF').style.display = e.target.value === 'loan' ? 'block' : 'none'; $('#aOpenL').textContent = openLabel(e.target.value); };
 }
