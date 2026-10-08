@@ -95,7 +95,8 @@ a{color:var(--pri)}
 const $ = s => document.querySelector(s);
 const KEY = 'bk_v1';
 const LN = {co: '公司', me: '個人'};
-const TYPES = {bank: '銀行', cash: '現金', wallet: '電子錢包', card: '信用卡', loan: '貸款'};
+const TYPES = {bank: '銀行', cash: '現金', wallet: '電子錢包', invest: '股票投資', card: '信用卡', loan: '貸款'};
+const MKT = {TW: ['台股', 'TWD'], US: ['美股', 'USD'], JP: ['日股（手動價格）', 'JPY'], OT: ['其他（手動價格）', 'TWD']};
 const TXT = {exp: '支出', inc: '收入', xfer: '轉帳', loan: '還貸款'};
 const CUR = {TWD: '$', USD: 'US$', JPY: '¥'}, CURN = {TWD: '台幣', USD: '美元', JPY: '日圓'};
 const FREQ = {m: '每月', q: '每季', y: '每年'};
@@ -121,7 +122,7 @@ function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('o
 function seed() {
   const a = (name, ledger, type, extra = {}) => ({id: uid(), name, ledger, type, open: 0, ...extra});
   const accounts = [
-    a('個人銀行', 'me', 'bank'), a('個人現金', 'me', 'cash'),
+    a('個人銀行', 'me', 'bank'), a('個人現金', 'me', 'cash'), a('股票投資', 'me', 'invest'),
     a('信用卡1', 'me', 'card'), a('信用卡2', 'me', 'card'), a('信用卡3', 'me', 'card'),
     a('公司銀行A', 'co', 'bank'), a('公司銀行B', 'co', 'bank'),
     a('個人貸款1', 'me', 'loan', {rate: 0, pay: 0, day: 1}), a('個人貸款2', 'me', 'loan', {rate: 0, pay: 0, day: 1}),
@@ -136,7 +137,7 @@ function seed() {
     {id: uid(), ledger: 'co', kind: 'exp', name: '利息支出', sys: 'int'},
     {id: uid(), ledger: 'me', kind: 'exp', name: '貸款利息', sys: 'int'},
   ];
-  return {v: 2, accounts, cats, txs: [], recs: [], openX: 0, days: {}, skips: {}, lastBackup: null, lastAcc: {}};
+  return {v: 3, accounts, cats, txs: [], recs: [], holds: [], openX: 0, days: {}, skips: {}, lastBackup: null, lastAcc: {}};
 }
 function load() { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } }
 let S = load() || seed();
@@ -152,6 +153,12 @@ function migrate() {
     }
     S.v = 2;
   }
+  // v2 → v3：加入股票投資帳戶與持股清單
+  if (S.v < 3) {
+    if (!S.accounts.some(a => a.type === 'invest')) S.accounts.push({id: uid(), name: '股票投資', ledger: 'me', type: 'invest', open: 0});
+    S.v = 3;
+  }
+  S.holds = S.holds || [];
 }
 migrate();
 function save() {
@@ -239,6 +246,41 @@ function balances(upto) {
   return m;
 }
 const accBal = (a, m) => isLia(a) ? -(m['A:' + a.id] || 0) : (m['A:' + a.id] || 0);
+// 股票：市值 = 股數 × 價格 × 匯率；投資帳戶的「帳面餘額」是投入淨額（買進減賣出）
+const fxOf = c => !c || c === 'TWD' ? 1 : (S.fx?.[c] || 0);
+const holdVal = h => Math.round((+h.shares || 0) * (+h.price || 0) * fxOf(h.cur));
+const invVal = a => sum(S.holds.filter(h => h.acc === a.id), holdVal);
+const accVal = (a, m) => a.type === 'invest' ? invVal(a) : accBal(a, m);
+// 某帳本的資產負債；公私往來也算進去（個人：公司欠你＝資產；公司：欠老闆＝負債）
+function sheetOf(L, m) {
+  const assets = [], debts = [];
+  for (const a of S.accounts.filter(a => a.ledger === L)) {
+    const v = accVal(a, m); if (!Math.round(v)) continue;
+    (isLia(a) ? debts : assets).push([a.name + (a.type === 'invest' ? '（市值）' : ''), v]);
+  }
+  const x = m['X:me'] || 0;
+  if (Math.round(x)) {
+    if (L === 'me') (x > 0 ? assets : debts).push([x > 0 ? '公司欠你' : '你欠公司', Math.abs(x)]);
+    else (x > 0 ? debts : assets).push([x > 0 ? '欠老闆（公私往來）' : '老闆欠公司（公私往來）', Math.abs(x)]);
+  }
+  const A = sum(assets, r => r[1]), D = sum(debts, r => r[1]);
+  return {assets, debts, A, D, net: A - D, x: Math.abs(x)};
+}
+// 股價：FinMind 免費 API（台股、美股收盤價），每天每檔抓一次
+async function fetchPrices(force) {
+  const start = ymd(new Date(Date.now() - 14 * 864e5)); let n = 0;
+  for (const h of S.holds) {
+    if (!['TW', 'US'].includes(h.mkt) || !h.sym || (!force && h.chk === today())) continue;
+    try {
+      const ds = h.mkt === 'TW' ? 'TaiwanStockPrice' : 'USStockPrice';
+      const j = await (await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=${ds}&data_id=${encodeURIComponent(h.sym.trim().toUpperCase())}&start_date=${start}`)).json();
+      const last = j.data?.[j.data.length - 1], px = last && (last.close ?? last.Close);
+      if (px > 0) { h.price = px; h.pdate = last.date; h.chk = today(); n++; }
+    } catch {}
+  }
+  if (n) save();
+  return n;
+}
 function keyName(k) {
   const [p, id] = k.split(':');
   if (p === 'A') return acc(id)?.name || '(已刪帳戶)';
@@ -315,6 +357,13 @@ function monthNav() {
 function shiftMonth(k) { const [y, m] = ym.split('-').map(Number); const d = new Date(y, m - 1 + k, 1); ym = d.getFullYear() + '-' + pad(d.getMonth() + 1); }
 
 // ----- 首頁 -----
+function netCard(m) {
+  const co = sheetOf('co', m), me = sheetOf('me', m);
+  const row = (n, A, D) => `<tr><td>${n}</td><td class="r num">${money(A)}</td><td class="r num">${money(D)}</td><td class="r num ${A - D < 0 ? 'neg' : ''}"><b>${money(A - D)}</b></td></tr>`;
+  return `<div class="card" data-a="gobs"><h2>資產總覽 <span class="mu" style="float:right">明細 ›</span></h2><table><tr><th></th><th class="r">資產</th><th class="r">負債</th><th class="r">淨值</th></tr>
+    ${row('公司', co.A, co.D)}${row('個人', me.A, me.D)}<tr class="tot"><td>合計</td><td class="r num">${money(co.A + me.A - co.x)}</td><td class="r num">${money(co.D + me.D - co.x)}</td><td class="r num ${co.net + me.net < 0 ? 'neg' : ''}">${money(co.net + me.net)}</td></tr></table>
+    <div class="mu" style="margin-top:4px">合計已扣掉公司與個人之間互欠的錢。股票以最新股價計算。</div></div>`;
+}
 function vHome() {
   const m = balances(), owe = m['X:me'] || 0, st = streak(), td = !!S.days[today()];
   let h = `<div class="card"><div class="row" style="border:0;padding:0"><div><h2>連續記帳</h2><span class="bign">${st}</span> 天</div>
@@ -333,13 +382,13 @@ function vHome() {
   }).join('')}</div>`;
   const pend = S.txs.filter(isPending).length;
   if (pend) h += `<div class="card warn" data-a="gopend">有 <b>${pend}</b> 筆待分類，點這裡整理 →</div>`;
+  h += netCard(m);
   const days = S.lastBackup ? Math.floor((Date.now() - S.lastBackup) / 864e5) : null;
   if (S.txs.length && (days === null || days >= 7)) h += `<div class="card warn" data-a="gobackup">資料只存在這支手機上，${days === null ? '你還沒備份過' : `已 ${days} 天沒備份`}。點這裡匯出備份 →</div>`;
   for (const L of ['co', 'me']) {
     const as = liveAccs(a => a.ledger === L);
-    const asset = sum(as.filter(a => !isLia(a)), a => accBal(a, m)), debt = sum(as.filter(isLia), a => accBal(a, m));
-    h += `<div class="card"><h2>${LN[L]}帳戶　<span class="mu">資產 ${money(asset)}・負債 ${money(debt)}</span></h2>${as.map(a => {
-      const b = accBal(a, m);
+    h += `<div class="card"><h2>${LN[L]}帳戶</h2>${as.map(a => {
+      const b = accVal(a, m);
       return `<div class="row"><div>${esc(a.name)} <span class="mu">${TYPES[a.type]}</span></div><div class="num ${isLia(a) && b > 0 ? 'neg' : ''}">${isLia(a) && b > 0 ? '欠 ' : ''}${money(b)}</div></div>`;
     }).join('')}</div>`;
   }
@@ -394,7 +443,7 @@ function bars(m, total, cls) {
 }
 function vReport() {
   $('#hdx').innerHTML = monthNav();
-  const tabs = [['flow', '錢去哪'], ['trend', '每月趨勢'], ['x', '公私往來']];
+  const tabs = [['flow', '錢去哪'], ['trend', '每月趨勢'], ['bs', '資產負債'], ['x', '公私往來']];
   if (!tabs.some(([k]) => k === repTab)) repTab = 'flow';
   let h = `<div class="seg" style="margin-top:6px">${tabs.map(([k, n]) => `<button data-a="rt" data-k="${k}" class="${repTab === k ? 'on' : ''}">${n}</button>`).join('')}</div>`;
   const end = ym + '-31';
@@ -407,6 +456,16 @@ function vReport() {
         ${f.prin ? `<div class="mu" style="margin-top:8px">另外還了貸款本金 ${money(f.prin)}（本金是在減少欠款，所以不算進支出）</div>` : ''}
         ${f.ti ? `<h2 style="margin-top:14px">錢從哪來</h2>${bars(f.inc, f.ti, 'in')}` : ''}</div>`;
     }
+  } else if (repTab === 'bs') {
+    $('#hdx').innerHTML = '<span class="mu">目前</span>';
+    const m = balances();
+    for (const L of ['co', 'me']) {
+      const b = sheetOf(L, m);
+      const list = rs => rs.length ? rs.map(([n, v]) => `<div class="row"><div>${esc(n)}</div><div class="num">${money(v)}</div></div>`).join('') : '<div class="mu">無</div>';
+      h += `<div class="card"><h2>${LN[L]}</h2><div class="stat3"><div><span class="mu">資產</span><b class="num">${money(b.A)}</b></div><div><span class="mu">負債</span><b class="num">${money(b.D)}</b></div><div><span class="mu">淨值</span><b class="num ${b.net < 0 ? 'neg' : ''}">${money(b.net)}</b></div></div>
+        <h2 style="margin-top:10px">資產</h2>${list(b.assets)}<h2 style="margin-top:10px">負債</h2>${list(b.debts)}</div>`;
+    }
+    h += holdCard(m);
   } else if (repTab === 'trend') {
     const ms = [];
     for (let k = 5; k >= 0; k--) { const [y, m] = ym.split('-').map(Number); const d = new Date(y, m - 1 - k, 1); ms.push(d.getFullYear() + '-' + pad(d.getMonth() + 1)); }
@@ -433,6 +492,75 @@ function vReport() {
       <tr class="tot"><td colspan="3">月底餘額</td><td class="r num">${money(run)}</td></tr></table></div>`;
   }
   return h;
+}
+
+// ----- 股票／ETF -----
+function holdCard(m) {
+  const invs = S.accounts.filter(a => a.type === 'invest' && !a.hide);
+  let h = `<div class="card"><h2>股票／ETF</h2>`;
+  for (const a of invs) {
+    const hs = S.holds.filter(x => x.acc === a.id), v = invVal(a), c = accBal(a, m), pl = v - c;
+    if (invs.length > 1) h += `<div class="mu" style="margin-top:6px">${esc(a.name)}</div>`;
+    h += hs.length ? hs.map(x => `<div class="row" data-a="holdEdit" data-id="${x.id}"><div><div>${esc(x.sym)} ${esc(x.name || '')}</div>
+        <div class="mu">${+x.shares || 0} 股 × ${CUR[x.cur]}${+x.price || 0}${x.pdate ? `（${x.pdate.slice(5)}）` : ''}${x.cur !== 'TWD' && !S.fx ? '・缺匯率' : ''}</div></div>
+        <div class="num">${money(holdVal(x))}</div><button class="btn sm sec" data-a="trade" data-id="${x.id}">買賣</button></div>`).join('') : '<div class="mu">還沒有持股，按下方新增。</div>';
+    if (hs.length) h += `<div class="row"><div><b>市值 ${money(v)}</b><div class="mu">投入淨額 ${money(c)}（買進減賣出）</div></div><div class="num ${pl < 0 ? 'neg' : 'pos'}">${pl >= 0 ? '+' : ''}${money(pl)}${c > 0 ? `<div class="mu">${(pl / c * 100).toFixed(1)}%</div>` : ''}</div></div>`;
+  }
+  return h + `<div class="grid2"><button class="btn sec" data-a="holdNew">＋ 新增持股</button><button class="btn sec" data-a="pxNow">更新股價</button></div>
+    <div class="mu" style="margin-top:6px">台股、美股每天自動抓收盤價（FinMind）；日股和其他請手動填價格。股利請記成「收入 → 股利」。</div></div>`;
+}
+function openHold(x) {
+  const n = !x; x = x || {id: '', sym: '', name: '', mkt: 'TW', shares: '', price: '', acc: S.accounts.find(a => a.type === 'invest')?.id};
+  F = null;
+  showSheet(`<div class="shd"><b>${n ? '新增持股' : '編輯持股'}</b><button class="x" data-a="close">✕</button></div>
+    <div class="grid2"><div><label class="f">代號</label><input id="hSym" value="${esc(x.sym)}" placeholder="例：0050、VOO" autocapitalize="characters"></div>
+    <div><label class="f">名稱（選填）</label><input id="hName" value="${esc(x.name)}" placeholder="例：元大台灣50"></div>
+    <div><label class="f">市場</label><select id="hMkt">${Object.entries(MKT).map(([k, [nm]]) => `<option value="${k}" ${x.mkt === k ? 'selected' : ''}>${nm}</option>`).join('')}</select></div>
+    <div><label class="f">放在哪個投資帳戶</label><select id="hAcc">${S.accounts.filter(a => a.type === 'invest').map(a => `<option value="${a.id}" ${x.acc === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></div>
+    <div><label class="f">目前持有股數</label><input id="hShares" inputmode="decimal" value="${esc(x.shares)}"></div>
+    <div><label class="f">現價（台股美股會自動更新）</label><input id="hPrice" inputmode="decimal" value="${esc(x.price)}"></div></div>
+    <div class="mu" style="margin-top:8px">這裡直接改股數不會動到銀行餘額。之後買進賣出請用清單上的「買賣」，會同時記一筆轉帳。</div>
+    <button class="btn" data-a="holdSave" data-id="${x.id}">儲存</button>
+    ${n ? '' : `<button class="btn del" data-a="holdDel" data-id="${x.id}">刪除這檔</button>`}`);
+}
+async function saveHold(id) {
+  const sym = $('#hSym').value.trim().toUpperCase(); if (!sym) return toast('請填代號');
+  const acc0 = $('#hAcc').value; if (!acc(acc0)) return toast('請先在設定新增「股票投資」帳戶');
+  const o = id ? S.holds.find(h => h.id === id) : {id: uid()};
+  const mkt = $('#hMkt').value, price = parseFloat($('#hPrice').value) || 0;
+  if (o.sym !== sym || o.mkt !== mkt) { o.chk = ''; o.pdate = ''; }
+  Object.assign(o, {sym, name: $('#hName').value.trim(), mkt, cur: MKT[mkt][1], acc: acc0, shares: parseFloat($('#hShares').value) || 0});
+  if (price !== +o.price) { o.price = price; o.pdate = o.pdate || ''; }
+  if (!id) S.holds.push(o);
+  save(); closeSheet(); render();
+  if (['TW', 'US'].includes(mkt) && navigator.onLine) { toast('抓取股價中…'); const k = await fetchPrices(); render(); toast(k ? '股價已更新' : '已儲存（沒抓到股價，請確認代號或手動填）'); }
+  else toast('已儲存');
+}
+let TR = null;
+function openTrade(x) {
+  TR = TR && TR.id === x.id ? TR : {id: x.id, side: 'buy', acc: S.lastAcc.trade || formAccs().find(a => a.ledger === 'me' && a.type === 'bank')?.id};
+  F = null;
+  const banks = formAccs().filter(a => a.type !== 'invest' && a.type !== 'card');
+  showSheet(`<div class="shd"><b>買賣 ${esc(x.sym)} ${esc(x.name || '')}</b><button class="x" data-a="close">✕</button></div>
+    ${seg('trSide', [['buy', '買進'], ['sell', '賣出']], TR.side)}
+    <div class="grid2"><div><label class="f">股數</label><input id="tShares" inputmode="decimal" value="${esc(TR.shares || '')}"></div>
+    <div><label class="f">${TR.side === 'buy' ? '總共付出（台幣，含手續費）' : '實際入帳（台幣，扣掉手續費和稅）'}</label><input id="tAmt" inputmode="decimal" value="${esc(TR.amt || '')}"></div></div>
+    <label class="f">${TR.side === 'buy' ? '從哪個帳戶扣款' : '錢進到哪個帳戶'}</label>${chips('trAcc', banks.map(a => [a.id, a.name]), TR.acc)}
+    <label class="f">日期</label><input id="tDate" type="date" value="${esc(TR.date || today())}">
+    <div class="mu" style="margin-top:8px">目前持有 ${+x.shares || 0} 股。儲存後會調整股數，並記一筆「轉帳」（買股票不算花費，是錢換成股票）。</div>
+    <button class="btn" data-a="trSave" data-id="${x.id}">儲存</button>`);
+}
+function readTrade() { if (!TR || !$('#tShares')) return; TR.shares = $('#tShares').value; TR.amt = $('#tAmt').value; TR.date = $('#tDate').value; }
+function saveTrade(id) {
+  readTrade();
+  const x = S.holds.find(h => h.id === id), sh = calcRaw(TR.shares), amt = calc(TR.amt);
+  if (!(sh > 0)) return toast('請填股數'); if (!(amt > 0)) return toast('請填金額'); if (!acc(TR.acc)) return toast('請選帳戶');
+  if (TR.side === 'sell' && sh > (+x.shares || 0)) return toast('賣出股數超過持有');
+  x.shares = Math.round(((+x.shares || 0) + (TR.side === 'buy' ? sh : -sh)) * 10000) / 10000;
+  const inv = x.acc, bank = TR.acc;
+  S.txs.push({id: uid(), type: 'xfer', date: TR.date || today(), acc: TR.side === 'buy' ? bank : inv, to: TR.side === 'buy' ? inv : bank, amt, note: `${TR.side === 'buy' ? '買進' : '賣出'} ${x.sym} ${sh} 股`, created: Date.now()});
+  S.lastAcc.trade = bank; S.days[today()] = 1; TR = null;
+  save(); closeSheet(); render(); toast('已記錄');
 }
 
 // ----- 設定 -----
@@ -542,7 +670,7 @@ function renderForm() {
   h += `<label class="f">金額${isFx() ? '（' + CURN[F.cur] + '）' : ''}（可輸入算式，如 120+35）</label><input id="fAmt" class="big" inputmode="decimal" autocomplete="off" value="${esc(F.amt)}" placeholder="0">`;
   if (isFx()) h += `<div class="grid2"><div><label class="f">匯率（1 ${CURN[F.cur]} = ? 台幣）</label><input id="fRate" inputmode="decimal" value="${esc(F.rate)}"></div><div><label class="f">台幣金額</label><input id="fTwd" inputmode="decimal" value="${esc(F.twd)}"></div></div>
     <div class="mu" style="margin-top:4px">${S.fx ? `網路匯率（${S.fx.date}）。刷卡實際扣款以帳單為準，可以直接改台幣金額。` : '還沒抓到網路匯率，請手動填匯率。'}</div>`;
-  const accList = formAccs().map(a => [a.id, a.name]);
+  const accList = formAccs().filter(a => t === 'xfer' || a.type !== 'invest').map(a => [a.id, a.name]);
   if (t === 'exp' || t === 'inc') {
     h += `<label class="f">${t === 'exp' ? '從哪個帳戶付' : '收到哪個帳戶'}</label>${chips('fAcc', accList, F.acc)}`;
     h += `<label class="f">這筆屬於</label>${seg('fLed', [['co', '公司'], ['me', '個人']], L0)}`;
@@ -629,6 +757,7 @@ function saveTx() {
 }
 
 // ----- 帳戶表單 -----
+const openLabel = t => t === 'invest' ? '開始記帳時已投入的成本（用來算損益；市值由持股計算）' : ['card', 'loan'].includes(t) ? '開始記帳時的欠款（剩餘本金／卡費）' : '開始記帳時的餘額';
 function openAcc(a) {
   const n = !a; a = a || {id: '', name: '', ledger: 'me', type: 'bank', open: 0};
   F = null;
@@ -638,7 +767,7 @@ function openAcc(a) {
     <label class="f">名稱</label><input id="aName" value="${esc(a.name)}" placeholder="例：國泰公司戶">
     <div class="grid2"><div><label class="f">屬於</label><select id="aLed">${['co', 'me'].map(L => `<option value="${L}" ${a.ledger === L ? 'selected' : ''}>${LN[L]}</option>`).join('')}</select></div>
     <div><label class="f">類型</label><select id="aType" ${used ? 'disabled' : ''}>${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${a.type === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div></div>
-    <label class="f" id="aOpenL">${isLia(a) ? '開始記帳時的欠款（剩餘本金／卡費）' : '開始記帳時的餘額'}</label><input id="aOpen" inputmode="decimal" value="${+a.open || ''}" placeholder="0">
+    <label class="f" id="aOpenL">${openLabel(a.type)}</label><input id="aOpen" inputmode="decimal" value="${+a.open || ''}" placeholder="0">
     <div id="loanF" style="display:${a.type === 'loan' ? 'block' : 'none'}">
       <div class="grid2"><div><label class="f">年利率 %</label><input id="aRate" inputmode="decimal" value="${+a.rate || ''}" placeholder="例 2.5"></div>
       <div><label class="f">每月還款金額</label><input id="aPay" inputmode="decimal" value="${+a.pay || ''}"></div>
@@ -651,7 +780,7 @@ function openAcc(a) {
     ${!n && !used ? `<button class="btn del" data-a="accDel" data-id="${a.id}">刪除帳戶</button>` : ''}
     ${used ? '<div class="mu" style="margin-top:8px">此帳戶已有交易，無法刪除或改類型；不用了可勾選隱藏。</div>' : ''}`;
   showSheet(h);
-  $('#aType').onchange = e => { $('#loanF').style.display = e.target.value === 'loan' ? 'block' : 'none'; $('#aOpenL').textContent = ['card', 'loan'].includes(e.target.value) ? '開始記帳時的欠款（剩餘本金／卡費）' : '開始記帳時的餘額'; };
+  $('#aType').onchange = e => { $('#loanF').style.display = e.target.value === 'loan' ? 'block' : 'none'; $('#aOpenL').textContent = openLabel(e.target.value); };
 }
 function saveAcc(id) {
   const name = $('#aName').value.trim(); if (!name) return toast('請填名稱');
@@ -757,6 +886,16 @@ document.addEventListener('click', e => {
       }
       return renderForm();
     }
+    case 'gobs': cur = 'report'; repTab = 'bs'; render(); return scrollTo(0, 0);
+    case 'holdNew': return openHold();
+    case 'holdEdit': return openHold(S.holds.find(h => h.id === id));
+    case 'holdSave': return saveHold(id);
+    case 'holdDel': if (confirm('刪除這檔持股？（已記的買賣轉帳不受影響）')) { S.holds = S.holds.filter(h => h.id !== id); save(); closeSheet(); render(); } return;
+    case 'trade': e.stopPropagation(); TR = null; return openTrade(S.holds.find(h => h.id === id));
+    case 'trSide': readTrade(); TR.side = k; return openTrade(S.holds.find(h => h.id === TR.id));
+    case 'trAcc': readTrade(); TR.acc = k; return openTrade(S.holds.find(h => h.id === TR.id));
+    case 'trSave': return saveTrade(id);
+    case 'pxNow': toast('更新中…'); fetchPrices(true).then(n => { render(); toast(n ? `已更新 ${n} 檔` : '沒有可自動更新的持股，或網路／代號有問題'); }); return;
     case 'fxNow': fetchFx(true).then(ok => { render(); toast(ok ? '匯率已更新' : '更新失敗，請確認網路'); }); return;
     case 'fType': if (k === 'loan') F.cur = 'TWD'; F.type = k; if (k === 'loan' && !F.loan) { const l = liveAccs(x => x.type === 'loan')[0]; if (l) { F.loan = l.id; if (acc(l.payAcc)) F.acc = l.payAcc; if (!F.amt && l.pay) F.amt = String(l.pay); } } if (k === 'loan') { const l = acc(F.loan); const tt = calc(F.amt); if (l && tt > 0) { const s = loanSplit(l, tt); F.prin = String(s.prin); F.int = String(s.int); } } return renderForm();
     case 'fAcc': F.acc = k; if (!F.manual && F.lines) { F.lines[0].ledger = acc(k).ledger; F.lines[0].cat = ''; } return renderForm();
@@ -794,7 +933,7 @@ document.addEventListener('click', e => {
 document.addEventListener('change', e => { if (e.target.id === 'impFile' && e.target.files[0]) { importData(e.target.files[0]); e.target.value = ''; } });
 
 render();
-if (navigator.onLine) fetchFx().then(ok => { if (ok && cur === 'set') render(); });
+if (navigator.onLine) Promise.all([fetchFx(), fetchPrices()]).then(([a, b]) => { if ((a || b) && !F && !$('#sheet').classList.contains('on')) render(); });
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
