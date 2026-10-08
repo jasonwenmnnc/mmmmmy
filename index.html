@@ -267,21 +267,30 @@ function sheetOf(L, m) {
   const A = sum(assets, r => r[1]), D = sum(debts, r => r[1]);
   return {assets, debts, A, D, net: A - D, x: Math.abs(x)};
 }
-// 股價：FinMind 免費 API（台股、美股收盤價），每天每檔抓一次
+// 股票資料：FinMind 免費 API。台股（上市、上櫃、興櫃）與美股的正式名稱、最近收盤價
+const FM = 'https://api.finmindtrade.com/api/v4/data?dataset=';
+async function stockName(mkt, sym) {
+  const j = await (await fetch(FM + (mkt === 'TW' ? 'TaiwanStockInfo' : 'USStockInfo') + '&data_id=' + encodeURIComponent(sym))).json();
+  const it = j.data?.[0]; if (!it?.stock_name) return '';
+  return it.stock_name + (it.type === 'emerging' ? '（興櫃）' : '');
+}
+async function stockPrice(mkt, sym) {
+  const start = ymd(new Date(Date.now() - 14 * 864e5));
+  const j = await (await fetch(FM + (mkt === 'TW' ? 'TaiwanStockPrice' : 'USStockPrice') + '&data_id=' + encodeURIComponent(sym) + '&start_date=' + start)).json();
+  const last = j.data?.[j.data.length - 1], px = last && (last.close ?? last.Close);
+  return px > 0 ? {price: px, date: last.date} : null;
+}
+const dispName = x => x.label || x.name || '';
+// 股價每天每檔抓一次
 async function fetchPrices(force) {
   if (S.holds.some(h => h.cur !== 'TWD')) await fetchFx(); // 外幣持股需要匯率才算得出台幣市值
-  const start = ymd(new Date(Date.now() - 14 * 864e5)); let n = 0;
+  let n = 0;
   for (const h of S.holds) {
     if (!['TW', 'US'].includes(h.mkt) || !h.sym || (!force && h.chk === today())) continue;
     try {
-      const ds = h.mkt === 'TW' ? 'TaiwanStockPrice' : 'USStockPrice';
-      const j = await (await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=${ds}&data_id=${encodeURIComponent(h.sym.trim().toUpperCase())}&start_date=${start}`)).json();
-      const last = j.data?.[j.data.length - 1], px = last && (last.close ?? last.Close);
-      if (px > 0) { h.price = px; h.pdate = last.date; h.chk = today(); n++; }
-      if (!h.name && h.mkt === 'TW') { // 沒填名稱就自動帶入（上市、上櫃、興櫃都查得到）
-        const info = await (await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo&data_id=${encodeURIComponent(h.sym.trim())}`)).json();
-        const it = info.data?.[0]; if (it?.stock_name) { h.name = it.stock_name; if (it.type === 'emerging') h.name += '（興櫃）'; n = n || 1; }
-      }
+      const p = await stockPrice(h.mkt, h.sym);
+      if (p) { h.price = p.price; h.pdate = p.date; h.chk = today(); n++; }
+      if (!h.name) { const nm = await stockName(h.mkt, h.sym); if (nm) { h.name = nm; n = n || 1; } }
     } catch {}
   }
   if (n) save();
@@ -507,7 +516,7 @@ function homeStocks(m) {
   const hs = [...S.holds].sort((a, b) => holdVal(b) - holdVal(a));
   const tot = sum(hs, holdVal), cost = sum(S.accounts.filter(a => a.type === 'invest' && S.holds.some(h => h.acc === a.id)), a => accBal(a, m)), pl = tot - cost;
   return `<div class="card" data-a="gobs"><h2>股票／ETF（${hs.length} 檔）<span class="mu" style="float:right">明細 ›</span></h2>
-    ${hs.map(x => `<div class="row"><div>${esc(x.sym)} ${esc(x.name || '')}<div class="mu">${+x.shares || 0} 股${noPrice(x) ? '・<span class="neg">還沒有價格</span>' : ` × ${CUR[x.cur]}${+x.price}`}</div></div><div class="num">${money(holdVal(x))}</div></div>`).join('')}
+    ${hs.map(x => `<div class="row"><div>${esc(x.sym)} ${esc(dispName(x))}<div class="mu">${+x.shares || 0} 股${noPrice(x) ? '・<span class="neg">還沒有價格</span>' : ` × ${CUR[x.cur]}${+x.price}`}</div></div><div class="num">${money(holdVal(x))}</div></div>`).join('')}
     <div class="row"><div><b>總市值 ${money(tot)}</b>${cost ? `<div class="mu">投入淨額 ${money(cost)}</div>` : ''}</div>${cost ? `<div class="num ${pl < 0 ? 'neg' : 'pos'}">${pl >= 0 ? '+' : ''}${money(pl)}<div class="mu">${(pl / cost * 100).toFixed(1)}%</div></div>` : ''}</div>
     ${hs.some(noPrice) ? '<div class="mu neg">有持股還沒有價格，市值會少算。請到明細按「更新股價」，或點該檔手動填價格。</div>' : ''}</div>`;
 }
@@ -518,10 +527,10 @@ function holdCard(m) {
   for (const a of invs) {
     const hs = S.holds.filter(x => x.acc === a.id), v = invVal(a), c = accBal(a, m), pl = v - c;
     if (invs.length > 1) h += `<div class="mu" style="margin-top:6px">${esc(a.name)}</div>`;
-    h += hs.length ? hs.map(x => `<div class="row" data-a="holdEdit" data-id="${x.id}"><div><div>${esc(x.sym)} ${esc(x.name || '')}</div>
+    h += hs.length ? hs.map(x => `<div class="row" data-a="holdEdit" data-id="${x.id}"><div><div>${esc(x.sym)} ${esc(dispName(x))}</div>
         <div class="mu">${+x.shares || 0} 股${noPrice(x) ? '・<span class="neg">還沒有價格</span>' : ` × ${CUR[x.cur]}${+x.price}${x.pdate ? `（${x.pdate.slice(5)}）` : ''}`}</div></div>
         <div class="num">${money(holdVal(x))}</div><button class="btn sm sec" data-a="trade" data-id="${x.id}">買賣</button></div>`).join('') : '<div class="mu">還沒有持股，按下方新增。</div>';
-    if (hs.length) h += `<div class="row"><div><b>市值 ${money(v)}</b><div class="mu">投入淨額 ${money(c)}（買進減賣出）</div></div><div class="num ${pl < 0 ? 'neg' : 'pos'}">${pl >= 0 ? '+' : ''}${money(pl)}${c > 0 ? `<div class="mu">${(pl / c * 100).toFixed(1)}%</div>` : ''}</div></div>`;
+    if (hs.length) h += `<div class="row"><div><b>市值 ${money(v)}</b><div class="mu">投入淨額 ${money(c)}（買進減賣出）</div></div>${c > 0 ? `<div class="num ${pl < 0 ? 'neg' : 'pos'}">${pl >= 0 ? '+' : ''}${money(pl)}<div class="mu">${(pl / c * 100).toFixed(1)}%</div></div>` : '<div class="mu" style="text-align:right">要算損益，請到設定填<br>股票投資的投入成本</div>'}</div>`;
   }
   if (invs.length > 1 && S.holds.length) h += `<div class="row"><b>全部投資帳戶合計</b><b class="num">${money(sum(S.holds, holdVal))}</b></div>`;
   return h + `<div class="grid2"><button class="btn sec" data-a="holdNew">＋ 新增持股</button><button class="btn sec" data-a="pxNow">更新股價</button></div>
@@ -530,25 +539,48 @@ function holdCard(m) {
 function openHold(x) {
   const n = !x; x = x || {id: '', sym: '', name: '', mkt: 'TW', shares: '', price: '', acc: S.accounts.find(a => a.type === 'invest')?.id};
   F = null;
+  const auto = ['TW', 'US'].includes(x.mkt);
   showSheet(`<div class="shd"><b>${n ? '新增持股' : '編輯持股'}</b><button class="x" data-a="close">✕</button></div>
-    <div class="grid2"><div><label class="f">代號</label><input id="hSym" value="${esc(x.sym)}" placeholder="例：0050、VOO" autocapitalize="characters"></div>
-    <div><label class="f">名稱（選填）</label><input id="hName" value="${esc(x.name)}" placeholder="例：元大台灣50"></div>
-    <div><label class="f">市場</label><select id="hMkt">${Object.entries(MKT).map(([k, [nm]]) => `<option value="${k}" ${x.mkt === k ? 'selected' : ''}>${nm}</option>`).join('')}</select></div>
-    <div><label class="f">放在哪個投資帳戶</label><select id="hAcc">${S.accounts.filter(a => a.type === 'invest').map(a => `<option value="${a.id}" ${x.acc === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></div>
+    <label class="f">自訂名稱（選填，顯示時優先用這個）</label><input id="hLabel" value="${esc(x.label || '')}" placeholder="例：老婆的0050、長期存股">
+    <label class="f">市場</label>${seg('hMktSeg', Object.entries(MKT).map(([k, [nm]]) => [k, nm.replace('（手動價格）', '')]), x.mkt)}<input type="hidden" id="hMkt" value="${x.mkt}">
+    <div class="grid2"><div><label class="f">股票代碼</label><input id="hSym" value="${esc(x.sym)}" placeholder="${x.mkt === 'US' ? '例：VOO、AAPL' : '例：0050、6467'}" autocapitalize="characters" autocomplete="off"></div>
+    <div><label class="f">股票名稱${auto ? '（自動帶入）' : ''}</label><input id="hName" value="${esc(x.name || '')}" ${auto ? 'readonly style="opacity:.75"' : 'placeholder="請自行輸入"'}></div></div>
+    <div class="mu" id="hLook" style="margin-top:4px">${auto ? '輸入代碼後會自動查名稱和價格' : '這個市場要手動填名稱和價格'}</div>
+    <div class="grid2"><div><label class="f">放在哪個投資帳戶</label><select id="hAcc">${S.accounts.filter(a => a.type === 'invest').map(a => `<option value="${a.id}" ${x.acc === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></div>
     <div><label class="f">目前持有股數</label><input id="hShares" inputmode="decimal" value="${esc(x.shares)}"></div>
-    <div><label class="f">現價（台股美股會自動更新）</label><input id="hPrice" inputmode="decimal" value="${esc(x.price)}"></div></div>
+    <div><label class="f">現價（${auto ? '自動更新，也可手動改' : '手動輸入'}）</label><input id="hPrice" inputmode="decimal" value="${esc(x.price)}"></div></div>
     <div class="mu" style="margin-top:8px">這裡直接改股數不會動到銀行餘額。之後買進賣出請用清單上的「買賣」，會同時記一筆轉帳。</div>
     <button class="btn" data-a="holdSave" data-id="${x.id}">儲存</button>
     ${n ? '' : `<button class="btn del" data-a="holdDel" data-id="${x.id}">刪除這檔</button>`}`);
 }
+// 代碼輸入停 0.5 秒後查名稱與價格
+let lookT = 0, lookN = 0;
+function holdLookup() {
+  clearTimeout(lookT);
+  const mkt = $('#hMkt').value, sym = $('#hSym').value.trim().toUpperCase(), msg = $('#hLook');
+  if (!['TW', 'US'].includes(mkt)) return;
+  if (!sym) { $('#hName').value = ''; msg.textContent = '輸入代碼後會自動查名稱和價格'; return; }
+  msg.textContent = '查詢中…';
+  lookT = setTimeout(async () => {
+    const my = ++lookN;
+    try {
+      const [nm, p] = await Promise.all([stockName(mkt, sym), stockPrice(mkt, sym)]);
+      if (my !== lookN || !$('#hSym')) return;
+      $('#hName').value = nm;
+      if (p) { $('#hPrice').value = p.price; $('#hPrice').dataset.pdate = p.date; }
+      msg.innerHTML = nm ? `找到：${esc(nm)}${p ? `，${p.date.slice(5)} 收盤 ${CUR[MKT[mkt][1]]}${p.price}` : '（沒有近期價格，請手動填）'}` : `<span class="neg">找不到${mkt === 'TW' ? '台股' : '美股'}代碼 ${esc(sym)}，請確認代碼或市場</span>`;
+    } catch { if (my === lookN) msg.textContent = '查詢失敗，請確認網路；也可以手動填名稱和價格'; }
+  }, 500);
+}
+$('#sheet').addEventListener('input', e => { if (e.target.id === 'hSym') holdLookup(); });
 async function saveHold(id) {
   const sym = $('#hSym').value.trim().toUpperCase(); if (!sym) return toast('請填代號');
   const acc0 = $('#hAcc').value; if (!acc(acc0)) return toast('請先在設定新增「股票投資」帳戶');
   const o = id ? S.holds.find(h => h.id === id) : {id: uid()};
   const mkt = $('#hMkt').value, price = parseFloat($('#hPrice').value) || 0;
   if (o.sym !== sym || o.mkt !== mkt) { o.chk = ''; o.pdate = ''; }
-  Object.assign(o, {sym, name: $('#hName').value.trim(), mkt, cur: MKT[mkt][1], acc: acc0, shares: parseFloat($('#hShares').value) || 0});
-  if (price !== +o.price) { o.price = price; o.pdate = o.pdate || ''; }
+  Object.assign(o, {sym, label: $('#hLabel').value.trim(), name: $('#hName').value.trim(), mkt, cur: MKT[mkt][1], acc: acc0, shares: parseFloat($('#hShares').value) || 0});
+  if (price !== +o.price) { o.price = price; o.pdate = $('#hPrice').dataset.pdate || ''; if (o.pdate) o.chk = today(); }
   if (!id) S.holds.push(o);
   save(); closeSheet(); render();
   if (['TW', 'US'].includes(mkt) && navigator.onLine) { toast('抓取股價中…'); const k = await fetchPrices(); render(); toast(k ? '股價已更新' : '已儲存（沒抓到股價，請確認代號或手動填）'); }
@@ -559,7 +591,7 @@ function openTrade(x) {
   TR = TR && TR.id === x.id ? TR : {id: x.id, side: 'buy', acc: S.lastAcc.trade || formAccs().find(a => a.ledger === 'me' && a.type === 'bank')?.id};
   F = null;
   const banks = formAccs().filter(a => a.type !== 'invest' && a.type !== 'card');
-  showSheet(`<div class="shd"><b>買賣 ${esc(x.sym)} ${esc(x.name || '')}</b><button class="x" data-a="close">✕</button></div>
+  showSheet(`<div class="shd"><b>買賣 ${esc(x.sym)} ${esc(dispName(x))}</b><button class="x" data-a="close">✕</button></div>
     ${seg('trSide', [['buy', '買進'], ['sell', '賣出']], TR.side)}
     <div class="grid2"><div><label class="f">股數</label><input id="tShares" inputmode="decimal" value="${esc(TR.shares || '')}"></div>
     <div><label class="f">${TR.side === 'buy' ? '總共付出（台幣，含手續費）' : '實際入帳（台幣，扣掉手續費和稅）'}</label><input id="tAmt" inputmode="decimal" value="${esc(TR.amt || '')}"></div></div>
@@ -906,6 +938,12 @@ document.addEventListener('click', e => {
     }
     case 'gobs': cur = 'report'; repTab = 'bs'; render(); return scrollTo(0, 0);
     case 'holdNew': return openHold();
+    case 'hMktSeg': {
+      const keep = {id: el.closest('#sheet').querySelector('[data-a=holdSave]').dataset.id, label: $('#hLabel').value, mkt: k, sym: $('#hSym').value, name: '', acc: $('#hAcc').value, shares: $('#hShares').value, price: ''};
+      const isNew = !keep.id; openHold(keep);
+      if (isNew) { $('.shd b').textContent = '新增持股'; $('[data-a=holdDel]')?.remove(); }
+      return holdLookup();
+    }
     case 'holdEdit': return openHold(S.holds.find(h => h.id === id));
     case 'holdSave': return saveHold(id);
     case 'holdDel': if (confirm('刪除這檔持股？（已記的買賣轉帳不受影響）')) { S.holds = S.holds.filter(h => h.id !== id); save(); closeSheet(); render(); } return;
